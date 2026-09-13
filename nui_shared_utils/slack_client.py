@@ -4,6 +4,7 @@ Refactored Slack client using BaseClient for DRY code patterns.
 
 import os
 import logging
+from dataclasses import dataclass
 from typing import Any, List, Dict, Optional
 from pathlib import Path
 from slack_sdk import WebClient
@@ -28,6 +29,39 @@ DEFAULT_ACCOUNT_NAMES = {
     "234567890123": "Development",
     "345678901234": "Staging",
 }
+
+
+@dataclass(frozen=True)
+class SentMessage:
+    """Slack's answer to a ``chat.postMessage`` call.
+
+    ``ts`` is the handle Slack addresses a message by. Keep it to reply under
+    the message (:meth:`SlackClient.send_thread_reply`), edit it in place
+    (:meth:`SlackClient.update_message`) or annotate it
+    (:meth:`SlackClient.add_reaction`). Without it those three are unreachable,
+    which is why :meth:`SlackClient.post_message` exists alongside the
+    bool-returning :meth:`SlackClient.send_message`.
+
+    Truthiness follows ``ok``, so ``if client.post_message(...):`` reads the
+    same way the bool-returning call did.
+
+    Attributes:
+        ok: Whether Slack accepted the message.
+        ts: Message timestamp, or None when Slack did not return one.
+        channel: Channel Slack recorded the message against. Worth keeping
+            rather than reusing the channel you passed: posting to a user ID
+            or channel name resolves to a different id than the one you sent.
+        response: The underlying ``slack_sdk`` response, for fields this type
+            does not name.
+    """
+
+    ok: bool
+    ts: Optional[str] = None
+    channel: Optional[str] = None
+    response: Any = None
+
+    def __bool__(self) -> bool:
+        return self.ok
 
 
 class SlackClient(BaseClient, ServiceHealthMixin):
@@ -380,6 +414,135 @@ class SlackClient(BaseClient, ServiceHealthMixin):
             }]
         }]
 
+    def _blocks_with_header(
+        self,
+        blocks: Optional[List[Dict]],
+        include_lambda_header: bool,
+        event_type: Optional[str],
+    ) -> Optional[List[Dict]]:
+        """Prepend the standard context header to ``blocks`` when requested.
+
+        Shared by send_message and post_message so both head a message the same
+        way. Consumers used to rebuild this by calling the private header
+        builders directly; call post_message instead.
+        """
+        if not include_lambda_header:
+            return blocks
+
+        if self._lambda_context["function_name"] != "Unknown":
+            header_blocks = self._create_lambda_header_block(event_type=event_type)
+        else:
+            header_blocks = self._create_local_header_block(event_type=event_type)
+
+        return header_blocks + (blocks or [])
+
+    def _chat_post(
+        self,
+        channel: str,
+        text: str,
+        blocks: Optional[List[Dict]],
+        attachments: Optional[List[Dict]],
+        include_lambda_header: bool,
+        event_type: Optional[str],
+        unfurl_links: Optional[bool],
+        unfurl_media: Optional[bool],
+    ) -> SentMessage:
+        """Build the payload, post it, log the outcome, return Slack's answer."""
+        kwargs: Dict[str, Any] = dict(
+            channel=channel,
+            text=text,
+            blocks=self._blocks_with_header(blocks, include_lambda_header, event_type),
+            attachments=attachments,
+        )
+        # Forward unfurl controls only when explicitly set, so existing callers
+        # keep Slack's default behavior (and their call assertions stay unchanged).
+        if unfurl_links is not None:
+            kwargs["unfurl_links"] = unfurl_links
+        if unfurl_media is not None:
+            kwargs["unfurl_media"] = unfurl_media
+
+        response = self._service_client.chat_postMessage(**kwargs)
+
+        sent = SentMessage(
+            ok=bool(response.get("ok", False)),
+            ts=response.get("ts"),
+            channel=response.get("channel"),
+            response=response,
+        )
+
+        if sent.ok:
+            log.info("Slack message sent successfully", extra={"channel": channel, "ts": sent.ts})
+        else:
+            log.error("Slack API returned error", extra={"error": response.get("error", "Unknown error")})
+        return sent
+
+    def post_message(
+        self,
+        channel: str,
+        text: str,
+        blocks: Optional[List[Dict]] = None,
+        attachments: Optional[List[Dict]] = None,
+        include_lambda_header: bool = True,
+        event_type: Optional[str] = None,
+        unfurl_links: Optional[bool] = None,
+        unfurl_media: Optional[bool] = None,
+    ) -> SentMessage:
+        """
+        Send a message and return Slack's response, including the ``ts``.
+
+        Same arguments and same standard header as send_message; the difference
+        is what comes back. send_message answers True/False and discards the
+        ``ts``, which is the only handle send_thread_reply, update_message and
+        add_reaction accept, so a caller that may later thread under, edit or
+        react to its own message wants this one.
+
+        Unlike send_message, **this method does not swallow errors**: a caller
+        holding a ``ts`` generally needs to know why a send failed rather than
+        read a bare False, and swallowing would hide a retryable
+        ``SlackApiError`` behind an empty result. A response Slack answered but
+        rejected (``ok`` false) is returned as ``SentMessage(ok=False)``, not
+        raised.
+
+        Args:
+            channel: Channel ID
+            text: Fallback text
+            blocks: Rich formatted blocks
+            attachments: Legacy attachment objects (supports color sidebars)
+            include_lambda_header: Whether to include context header
+            event_type: Optional event type label for header (e.g., "Scheduled", "API", "SQS")
+            unfurl_links: Override Slack link unfurling. None leaves Slack's default;
+                False suppresses link preview cards (links stay clickable)
+            unfurl_media: Override Slack media unfurling. None leaves Slack's default;
+                False suppresses media preview cards
+
+        Returns:
+            SentMessage carrying ok, ts, channel and the raw response.
+
+        Raises:
+            slack_sdk.errors.SlackApiError: Slack rejected the call at the
+                transport/API layer. Any other exception raised by the
+                underlying client propagates too.
+
+        Example:
+            sent = client.post_message("C123", "Build started")
+            if sent:
+                client.send_thread_reply("C123", sent.ts, "Build finished")
+        """
+        return self._execute_with_error_handling(
+            "post_message",
+            lambda: self._chat_post(
+                channel=channel,
+                text=text,
+                blocks=blocks,
+                attachments=attachments,
+                include_lambda_header=include_lambda_header,
+                event_type=event_type,
+                unfurl_links=unfurl_links,
+                unfurl_media=unfurl_media,
+            ),
+            channel=channel,
+        )
+
     @handle_client_errors(default_return=False)
     def send_message(
         self,
@@ -409,54 +572,26 @@ class SlackClient(BaseClient, ServiceHealthMixin):
 
         Returns:
             True if successful, False otherwise
+
+        See Also:
+            post_message: same arguments, returns Slack's response (with the
+            ``ts``) instead of a bool, and raises rather than swallowing.
         """
-        def _send_operation():
-            # Add context header if requested
-            if include_lambda_header:
-                if self._lambda_context["function_name"] != "Unknown":
-                    header_blocks = self._create_lambda_header_block(event_type=event_type)
-                else:
-                    header_blocks = self._create_local_header_block(event_type=event_type)
-
-                if blocks:
-                    blocks_with_header = header_blocks + blocks
-                else:
-                    blocks_with_header = header_blocks
-            else:
-                blocks_with_header = blocks
-
-            kwargs = dict(
+        sent = self._execute_with_error_handling(
+            "send_message",
+            lambda: self._chat_post(
                 channel=channel,
                 text=text,
-                blocks=blocks_with_header,
+                blocks=blocks,
                 attachments=attachments,
-            )
-            # Forward unfurl controls only when explicitly set, so existing callers
-            # keep Slack's default behavior (and their call assertions stay unchanged).
-            if unfurl_links is not None:
-                kwargs["unfurl_links"] = unfurl_links
-            if unfurl_media is not None:
-                kwargs["unfurl_media"] = unfurl_media
-            response = self._service_client.chat_postMessage(**kwargs)
-
-            if response["ok"]:
-                log.info(
-                    "Slack message sent successfully",
-                    extra={"channel": channel, "ts": response["ts"]}
-                )
-                return True
-            else:
-                log.error(
-                    "Slack API returned error",
-                    extra={"error": response.get("error", "Unknown error")}
-                )
-                return False
-
-        return self._execute_with_error_handling(
-            "send_message",
-            _send_operation,
-            channel=channel
+                include_lambda_header=include_lambda_header,
+                event_type=event_type,
+                unfurl_links=unfurl_links,
+                unfurl_media=unfurl_media,
+            ),
+            channel=channel,
         )
+        return bool(sent)
 
     @handle_client_errors(default_return=False)
     def send_file(

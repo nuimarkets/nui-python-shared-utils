@@ -8,7 +8,7 @@ pytestmark = pytest.mark.unit
 
 from unittest.mock import patch, Mock
 from slack_sdk.errors import SlackApiError
-from nui_shared_utils.slack_client import SlackClient, DEFAULT_ACCOUNT_NAMES
+from nui_shared_utils.slack_client import SlackClient, SentMessage, DEFAULT_ACCOUNT_NAMES
 import os
 
 
@@ -200,6 +200,215 @@ class TestSendMessage:
         result = slack.send_message("C123", "Test message")
 
         assert result is False
+
+
+class TestPostMessage:
+    """Tests for post_message, which returns Slack's response instead of a bool."""
+
+    @staticmethod
+    def _client(mock_webclient, mock_get_secret, response=None):
+        mock_get_secret.return_value = {"bot_token": "xoxb-test-token"}
+        mock_client = Mock()
+        mock_webclient.return_value = mock_client
+        mock_client.chat_postMessage.return_value = response or {
+            "ok": True,
+            "ts": "1234567890.123456",
+            "channel": "C999",
+        }
+        return SlackClient(secret_name="test-secret"), mock_client
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_returns_ts_and_channel(self, mock_webclient, mock_get_secret):
+        """The ts is the whole point: send_message drops it, post_message keeps it."""
+        slack, _ = self._client(mock_webclient, mock_get_secret)
+
+        sent = slack.post_message("C123", "Test message", include_lambda_header=False)
+
+        assert isinstance(sent, SentMessage)
+        assert sent.ok is True
+        assert sent.ts == "1234567890.123456"
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_channel_comes_from_the_response_not_the_request(self, mock_webclient, mock_get_secret):
+        """Slack resolves a name or user ID to a different channel id than the one sent."""
+        slack, _ = self._client(
+            mock_webclient, mock_get_secret, response={"ok": True, "ts": "1.1", "channel": "D0RESOLVED"}
+        )
+
+        sent = slack.post_message("@someone", "Test message", include_lambda_header=False)
+
+        assert sent.channel == "D0RESOLVED"
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_exposes_raw_response(self, mock_webclient, mock_get_secret):
+        """Fields SentMessage does not name stay reachable."""
+        response = {"ok": True, "ts": "1.1", "channel": "C999", "message": {"bot_id": "B1"}}
+        slack, _ = self._client(mock_webclient, mock_get_secret, response=response)
+
+        sent = slack.post_message("C123", "Test message", include_lambda_header=False)
+
+        assert sent.response is response
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_not_ok_is_returned_not_raised(self, mock_webclient, mock_get_secret):
+        """A response Slack answered but rejected comes back as ok=False."""
+        slack, _ = self._client(mock_webclient, mock_get_secret, response={"ok": False, "error": "invalid_auth"})
+
+        sent = slack.post_message("C123", "Test message", include_lambda_header=False)
+
+        assert sent.ok is False
+        assert sent.ts is None
+        assert bool(sent) is False
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_api_error_propagates(self, mock_webclient, mock_get_secret):
+        """Unlike send_message, post_message does not swallow the error.
+
+        A caller that wants the ts usually wants to retry on a retryable
+        SlackApiError, which a bare False cannot distinguish from a rejection.
+        """
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+        mock_client.chat_postMessage.side_effect = SlackApiError(
+            message="ratelimited", response={"error": "ratelimited"}
+        )
+
+        with pytest.raises(SlackApiError):
+            slack.post_message("C123", "Test message", include_lambda_header=False)
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_unexpected_error_propagates(self, mock_webclient, mock_get_secret):
+        """Non-Slack exceptions are not swallowed either."""
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+        mock_client.chat_postMessage.side_effect = Exception("Network error")
+
+        with pytest.raises(Exception, match="Network error"):
+            slack.post_message("C123", "Test message", include_lambda_header=False)
+
+    @patch("nui_shared_utils.slack_client.create_aws_client")
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    @patch.dict(os.environ, {"AWS_LAMBDA_FUNCTION_NAME": "test-function", "STAGE": "prod"})
+    def test_includes_the_standard_header(self, mock_webclient, mock_get_secret, mock_boto3):
+        """Header parity with send_message is why consumers can stop hand-rolling it."""
+        mock_sts = Mock()
+        mock_boto3.return_value = mock_sts
+        mock_sts.get_caller_identity.return_value = {"Account": "123456789012"}
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+
+        slack.post_message(
+            "C123", "Test message", blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": "Original block"}}]
+        )
+
+        blocks = mock_client.chat_postMessage.call_args.kwargs["blocks"]
+        assert len(blocks) == 2
+        assert blocks[0]["type"] == "context"
+        assert blocks[1]["text"]["text"] == "Original block"
+
+    @patch("nui_shared_utils.slack_client.create_aws_client")
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    @patch.dict(os.environ, {"AWS_LAMBDA_FUNCTION_NAME": "test-function", "STAGE": "prod"})
+    def test_header_can_be_disabled(self, mock_webclient, mock_get_secret, mock_boto3):
+        """cream-sync posts its first trade notification without a header."""
+        mock_sts = Mock()
+        mock_boto3.return_value = mock_sts
+        mock_sts.get_caller_identity.return_value = {"Account": "123456789012"}
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+
+        slack.post_message("C123", "Test message", include_lambda_header=False)
+
+        assert mock_client.chat_postMessage.call_args.kwargs["blocks"] is None
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_forwards_unfurl_flags(self, mock_webclient, mock_get_secret):
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+
+        slack.post_message("C123", "Test message", include_lambda_header=False, unfurl_links=False, unfurl_media=False)
+
+        kwargs = mock_client.chat_postMessage.call_args.kwargs
+        assert kwargs["unfurl_links"] is False
+        assert kwargs["unfurl_media"] is False
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_omits_unfurl_when_unset(self, mock_webclient, mock_get_secret):
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+
+        slack.post_message("C123", "Test message", include_lambda_header=False)
+
+        kwargs = mock_client.chat_postMessage.call_args.kwargs
+        assert "unfurl_links" not in kwargs
+        assert "unfurl_media" not in kwargs
+
+    @patch("nui_shared_utils.slack_client.create_aws_client")
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    @patch.dict(os.environ, {"AWS_LAMBDA_FUNCTION_NAME": "test-function", "STAGE": "prod"})
+    def test_payload_matches_send_message_exactly(self, mock_webclient, mock_get_secret, mock_boto3):
+        """The two methods differ in what they return, in nothing else.
+
+        This is the test that fails if a later change touches one path and not
+        the other, which is the drift that made consumers hand-roll the call in
+        the first place.
+        """
+        mock_sts = Mock()
+        mock_boto3.return_value = mock_sts
+        mock_sts.get_caller_identity.return_value = {"Account": "123456789012"}
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+
+        args = dict(
+            channel="C123",
+            text="Test message",
+            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": "Body"}}],
+            attachments=[{"color": "#ff0000", "text": "Attached"}],
+            event_type="Scheduled",
+            unfurl_links=False,
+        )
+
+        slack.send_message(**args)
+        send_kwargs = mock_client.chat_postMessage.call_args.kwargs
+
+        slack.post_message(**args)
+        post_kwargs = mock_client.chat_postMessage.call_args.kwargs
+
+        assert post_kwargs == send_kwargs
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_ts_round_trips_into_a_thread_reply(self, mock_webclient, mock_get_secret):
+        """The loop the bool return left open: post, then reply under it."""
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+
+        sent = slack.post_message("C123", "Parent", include_lambda_header=False)
+        assert slack.send_thread_reply("C123", sent.ts, "Reply") is True
+
+        assert mock_client.chat_postMessage.call_args.kwargs["thread_ts"] == "1234567890.123456"
+
+
+class TestSentMessage:
+    """Tests for the SentMessage result type."""
+
+    def test_truthiness_follows_ok(self):
+        assert bool(SentMessage(ok=True, ts="1.1")) is True
+        assert bool(SentMessage(ok=False)) is False
+
+    def test_defaults(self):
+        sent = SentMessage(ok=True)
+        assert sent.ts is None
+        assert sent.channel is None
+        assert sent.response is None
+
+    def test_is_frozen(self):
+        sent = SentMessage(ok=True, ts="1.1")
+        with pytest.raises(Exception):
+            sent.ts = "2.2"
 
 
 class TestSendFile:

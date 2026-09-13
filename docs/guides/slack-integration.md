@@ -96,20 +96,36 @@ slack.send_message(
 
 ### Message Threading
 
+Threading needs the parent message's `ts`, so post it with `post_message`
+rather than `send_message`: the two take the same arguments and add the same
+header, but `send_message` answers a bare `True`/`False` and drops the `ts`.
+
 ```python
-# Send initial message
-response = slack.send_message(
+# Send initial message, keeping Slack's response
+sent = slack.post_message(
     channel="#support",
     text="New support ticket received"
 )
 
 # Reply in thread
-thread_ts = response['ts']
-slack.send_message(
+slack.send_thread_reply(
     channel="#support",
-    text="Ticket assigned to engineering team",
-    thread_ts=thread_ts
+    thread_ts=sent.ts,
+    text="Ticket assigned to engineering team"
 )
+```
+
+`post_message` returns a `SentMessage` with `ok`, `ts`, `channel` and the raw
+`response`. It is truthy when `ok`, so `if sent:` reads the same way the bool
+return did. It also raises rather than swallowing a `SlackApiError`, so a
+caller can retry a rate-limited send instead of reading an empty result.
+
+The same `ts` addresses `update_message` and `add_reaction`:
+
+```python
+sent = slack.post_message(channel="#deployments", text="Deploy started")
+slack.update_message(channel="#deployments", ts=sent.ts, text="Deploy finished")
+slack.add_reaction(channel="#deployments", ts=sent.ts, emoji="white_check_mark")
 ```
 
 ### Direct Messages
@@ -268,16 +284,17 @@ def send_error_alert(error: Exception, context: dict):
     )
 
     # Send to alerts channel
-    response = slack.send_message(
+    sent = slack.post_message(
         channel="#alerts-critical",
+        text="Critical error",
         blocks=blocks
     )
 
     # Add stack trace in thread to avoid clutter
-    slack.send_message(
+    slack.send_thread_reply(
         channel="#alerts-critical",
-        text=f"```{error_details}```",
-        thread_ts=response['ts']
+        thread_ts=sent.ts,
+        text=f"```{error_details}```"
     )
 ```
 
@@ -415,8 +432,8 @@ Slack has rate limits:
 
 ```python
 # Good: Use threading for related messages
-response = slack.send_message(channel="#support", text="Main message")
-slack.send_message(channel="#support", text="Details", thread_ts=response['ts'])
+sent = slack.post_message(channel="#support", text="Main message")
+slack.send_thread_reply(channel="#support", thread_ts=sent.ts, text="Details")
 
 # Avoid: Flooding channel with sequential messages
 for item in items:  # Could hit rate limit
