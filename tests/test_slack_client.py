@@ -12,6 +12,8 @@ from slack_sdk.web.slack_response import SlackResponse
 from datetime import datetime, timezone
 from nui_shared_utils.slack_client import SlackClient, SentMessage, DEFAULT_ACCOUNT_NAMES
 import os
+import nui_shared_utils
+from pathlib import Path
 
 
 class TestSlackClient:
@@ -487,6 +489,231 @@ class TestSentMessage:
         import nui_shared_utils
 
         assert nui_shared_utils.SentMessage is SentMessage
+
+
+class TestPostThreadReply:
+    """Tests for post_thread_reply, the response-returning thread reply."""
+
+    @staticmethod
+    def _client(mock_webclient, mock_get_secret, response=None):
+        mock_get_secret.return_value = {"bot_token": "xoxb-test-token"}
+        mock_client = Mock()
+        mock_webclient.return_value = mock_client
+        mock_client.chat_postMessage.return_value = response or {"ok": True, "ts": "222.2", "channel": "C999"}
+        return SlackClient(secret_name="test-secret"), mock_client
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_returns_the_replys_own_ts(self, mock_webclient, mock_get_secret):
+        """The reply's ts, not the parent's: an edit to the reply needs its own."""
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+
+        sent = slack.post_thread_reply("C123", "111.1", "Reply")
+
+        assert sent.ts == "222.2"
+        assert mock_client.chat_postMessage.call_args.kwargs["thread_ts"] == "111.1"
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_api_error_propagates(self, mock_webclient, mock_get_secret):
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+        mock_client.chat_postMessage.side_effect = SlackApiError(message="no", response={"error": "channel_not_found"})
+
+        with pytest.raises(SlackApiError):
+            slack.post_thread_reply("C123", "111.1", "Reply")
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_send_thread_reply_still_swallows(self, mock_webclient, mock_get_secret):
+        """The bool-returning counterpart is unchanged by the shared refactor."""
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+        mock_client.chat_postMessage.side_effect = SlackApiError(message="no", response={"error": "channel_not_found"})
+
+        assert slack.send_thread_reply("C123", "111.1", "Reply") is False
+
+    @patch("nui_shared_utils.slack_client.create_aws_client")
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    @patch.dict(os.environ, {"AWS_LAMBDA_FUNCTION_NAME": "test-function", "STAGE": "prod"})
+    def test_payload_matches_send_thread_reply(self, mock_webclient, mock_get_secret, mock_boto3):
+        mock_sts = Mock()
+        mock_boto3.return_value = mock_sts
+        mock_sts.get_caller_identity.return_value = {"Account": "123456789012"}
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+
+        args = dict(
+            channel="C123",
+            thread_ts="111.1",
+            text="Reply",
+            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": "Body"}}],
+            include_lambda_header=True,
+        )
+
+        slack.send_thread_reply(**args)
+        assert mock_client.chat_postMessage.call_count == 1
+        send_kwargs = mock_client.chat_postMessage.call_args.kwargs
+        mock_client.chat_postMessage.reset_mock()
+
+        slack.post_thread_reply(**args)
+        assert mock_client.chat_postMessage.call_count == 1, "post_thread_reply posted nothing"
+        post_kwargs = mock_client.chat_postMessage.call_args.kwargs
+
+        assert send_kwargs["thread_ts"] == "111.1"
+        assert send_kwargs["blocks"][0]["type"] == "context"
+        assert post_kwargs == send_kwargs
+
+
+class TestPostUpdate:
+    """Tests for post_update, the response-returning message edit."""
+
+    @staticmethod
+    def _client(mock_webclient, mock_get_secret, response=None):
+        mock_get_secret.return_value = {"bot_token": "xoxb-test-token"}
+        mock_client = Mock()
+        mock_webclient.return_value = mock_client
+        mock_client.chat_update.return_value = response or {"ok": True, "ts": "111.1", "channel": "C999"}
+        return SlackClient(secret_name="test-secret"), mock_client
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_returns_the_edited_message(self, mock_webclient, mock_get_secret):
+        slack, _ = self._client(mock_webclient, mock_get_secret)
+
+        sent = slack.post_update("C999", "111.1", "Edited")
+
+        assert sent.ok is True
+        assert sent.ts == "111.1"
+        assert sent.channel == "C999"
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_api_error_propagates(self, mock_webclient, mock_get_secret):
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+        mock_client.chat_update.side_effect = SlackApiError(message="no", response={"error": "message_not_found"})
+
+        with pytest.raises(SlackApiError):
+            slack.post_update("C999", "111.1", "Edited")
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_update_message_still_swallows(self, mock_webclient, mock_get_secret):
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+        mock_client.chat_update.side_effect = SlackApiError(message="no", response={"error": "message_not_found"})
+
+        assert slack.update_message("C999", "111.1", "Edited") is False
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_payload_matches_update_message(self, mock_webclient, mock_get_secret):
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+        args = dict(channel="C999", ts="111.1", text="Edited", blocks=[{"type": "section"}])
+
+        slack.update_message(**args)
+        assert mock_client.chat_update.call_count == 1
+        send_kwargs = mock_client.chat_update.call_args.kwargs
+        mock_client.chat_update.reset_mock()
+
+        slack.post_update(**args)
+        assert mock_client.chat_update.call_count == 1, "post_update updated nothing"
+
+        assert send_kwargs["ts"] == "111.1"
+        assert mock_client.chat_update.call_args.kwargs == send_kwargs
+
+
+class TestPostFile:
+    """Tests for post_file and send_file's new thread_ts."""
+
+    @staticmethod
+    def _client(mock_webclient, mock_get_secret, response=None):
+        mock_get_secret.return_value = {"bot_token": "xoxb-test-token"}
+        mock_client = Mock()
+        mock_webclient.return_value = mock_client
+        mock_client.files_upload_v2.return_value = response or {"ok": True, "files": [{"id": "F1"}]}
+        return SlackClient(secret_name="test-secret"), mock_client
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_returns_the_raw_upload_response(self, mock_webclient, mock_get_secret):
+        """An upload has no single message ts, so it is not wrapped in SentMessage."""
+        response = {"ok": True, "files": [{"id": "F1"}]}
+        slack, _ = self._client(mock_webclient, mock_get_secret, response=response)
+
+        assert slack.post_file("C123", "data", "report.csv") is response
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_uploads_into_a_thread(self, mock_webclient, mock_get_secret):
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+
+        slack.post_file("C123", b"%PDF-", "tender.pdf", thread_ts="111.1")
+
+        kwargs = mock_client.files_upload_v2.call_args.kwargs
+        assert kwargs["thread_ts"] == "111.1"
+        assert kwargs["content"] == b"%PDF-"
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_omits_thread_ts_when_unset(self, mock_webclient, mock_get_secret):
+        """Existing callers' call assertions must not gain an argument."""
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+
+        slack.send_file("C123", "data", "report.csv")
+
+        assert "thread_ts" not in mock_client.files_upload_v2.call_args.kwargs
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_api_error_propagates(self, mock_webclient, mock_get_secret):
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+        mock_client.files_upload_v2.side_effect = SlackApiError(message="no", response={"error": "invalid_auth"})
+
+        with pytest.raises(SlackApiError):
+            slack.post_file("C123", "data", "report.csv")
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_send_file_still_swallows(self, mock_webclient, mock_get_secret):
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+        mock_client.files_upload_v2.side_effect = SlackApiError(message="no", response={"error": "invalid_auth"})
+
+        assert slack.send_file("C123", "data", "report.csv") is False
+
+
+class TestPostFamilyConvention:
+    """The two families are only teachable if they hold across every member."""
+
+    POST_METHODS = ["post_message", "post_thread_reply", "post_update", "post_file"]
+    SEND_METHODS = ["send_message", "send_thread_reply", "update_message", "send_file", "add_reaction"]
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_every_post_method_raises_and_every_send_method_swallows(self, mock_webclient, mock_get_secret):
+        mock_get_secret.return_value = {"bot_token": "xoxb-test-token"}
+        mock_client = Mock()
+        mock_webclient.return_value = mock_client
+        boom = SlackApiError(message="no", response={"error": "invalid_auth"})
+        for api in ("chat_postMessage", "chat_update", "files_upload_v2", "reactions_add"):
+            getattr(mock_client, api).side_effect = boom
+        slack = SlackClient(secret_name="test-secret")
+
+        calls = {
+            "post_message": ("C1", "t"),
+            "post_thread_reply": ("C1", "1.1", "t"),
+            "post_update": ("C1", "1.1", "t"),
+            "post_file": ("C1", "data", "f.csv"),
+            "send_message": ("C1", "t"),
+            "send_thread_reply": ("C1", "1.1", "t"),
+            "update_message": ("C1", "1.1", "t"),
+            "send_file": ("C1", "data", "f.csv"),
+            "add_reaction": ("C1", "1.1", "eyes"),
+        }
+
+        for name in self.POST_METHODS:
+            with pytest.raises(SlackApiError):
+                getattr(slack, name)(*calls[name])
+
+        for name in self.SEND_METHODS:
+            assert getattr(slack, name)(*calls[name]) is False, f"{name} should swallow and return False"
 
 
 class TestSendFile:
@@ -1414,3 +1641,47 @@ class TestSlackCredentialResolution:
 
         mock_get_secret.assert_called_once_with("test-secret")
         assert client.credentials["bot_token"] == "xoxb-sm-token"
+
+
+class TestLogContextKeys:
+    """Log context keys must not collide with reserved LogRecord attributes."""
+
+    def test_no_reserved_logrecord_keys_in_the_package(self):
+        """A collision raises inside logging and replaces the real error.
+
+        send_file hit this with `filename`: the SlackApiError it was reporting
+        became a KeyError, which the swallowing decorator turned into a bare
+        False. The raising post_* family surfaces it instead, so it has to be
+        impossible rather than merely unnoticed.
+        """
+        import logging as _logging
+        import re
+
+        reserved = set(_logging.LogRecord("n", 1, "p", 1, "m", None, None).__dict__)
+        reserved |= {"message", "asctime", "taskName"}
+
+        source = Path(nui_shared_utils.__file__).parent
+        offenders = []
+        for path in sorted(source.rglob("*.py")):
+            src = path.read_text()
+            for match in re.finditer(r"extra=\{([^}]*)\}", src, re.S):
+                offenders += [(path.name, k) for k in re.findall(r'"(\w+)"\s*:', match.group(1)) if k in reserved]
+            for match in re.finditer(r"_execute_with_error_handling\((.*?)\n\s*\)", src, re.S):
+                offenders += [(path.name, k) for k in re.findall(r"\n\s*(\w+)=", match.group(1)) if k in reserved]
+
+        assert offenders == [], f"reserved LogRecord keys used as log context: {offenders}"
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_post_file_surfaces_the_slack_error_not_a_logging_error(self, mock_webclient, mock_get_secret):
+        """The regression this guards: KeyError arriving where SlackApiError was."""
+        mock_get_secret.return_value = {"bot_token": "xoxb-test-token"}
+        mock_client = Mock()
+        mock_webclient.return_value = mock_client
+        mock_client.files_upload_v2.side_effect = SlackApiError(message="no", response={"error": "invalid_auth"})
+        slack = SlackClient(secret_name="test-secret")
+
+        with pytest.raises(SlackApiError) as excinfo:
+            slack.post_file("C123", "data", "report.csv")
+
+        assert excinfo.value.response["error"] == "invalid_auth"

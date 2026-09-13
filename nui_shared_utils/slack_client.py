@@ -71,6 +71,18 @@ class SentMessage:
 class SlackClient(BaseClient, ServiceHealthMixin):
     """
     Refactored Slack client with standardized patterns and reduced duplication.
+
+    Two families of write method, differing only in what they give back:
+
+    - ``send_message`` / ``send_thread_reply`` / ``update_message`` /
+      ``send_file`` / ``add_reaction`` return a bool and swallow every error.
+    - ``post_message`` / ``post_thread_reply`` / ``post_update`` / ``post_file``
+      return Slack's answer and **raise** on every failure, rejections included.
+
+    Reach for a ``post_*`` method when you need the message's ``ts`` (the only
+    handle an edit, reaction or thread reply accepts) or the error detail behind
+    a failure. Reach for the others when a failed notification should not take
+    the caller down with it. Each method's docstring names its counterpart.
     """
 
     def __init__(
@@ -607,53 +619,155 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         )
         return bool(sent)
 
+    def _upload_file(
+        self,
+        channel: str,
+        content: Any,
+        filename: str,
+        title: Optional[str],
+        thread_ts: Optional[str],
+    ) -> Any:
+        """Upload a file and log the outcome, returning Slack's raw response.
+
+        Shared by send_file and post_file. Unlike the message helpers this does
+        not build a SentMessage: an upload has no single message ``ts``, so one
+        would have to be invented.
+        """
+        kwargs: Dict[str, Any] = dict(
+            channel=channel,
+            content=content,
+            filename=filename,
+            title=title or filename,
+        )
+        if thread_ts is not None:
+            kwargs["thread_ts"] = thread_ts
+
+        response = self._service_client.files_upload_v2(**kwargs)
+
+        if response.get("ok", False):
+            log.info("File uploaded successfully", extra={"channel": channel, "file_name": filename})
+        else:
+            log.error("Slack file upload failed", extra={"error": response.get("error", "Unknown error")})
+        return response
+
     @handle_client_errors(default_return=False)
     def send_file(
         self,
         channel: str,
-        content: str,
+        content: Any,
         filename: str,
-        title: Optional[str] = None
+        title: Optional[str] = None,
+        thread_ts: Optional[str] = None,
     ) -> bool:
         """
         Upload file to Slack channel.
-        
+
         Args:
             channel: Channel ID
-            content: File content
+            content: File content (str or bytes)
             filename: File name
             title: Optional title
-            
+            thread_ts: Optional parent message timestamp, to upload into a thread
+
         Returns:
             True if successful, False otherwise
+
+        See Also:
+            post_file: same arguments, returns Slack's response and raises.
         """
-        def _upload_operation():
-            response = self._service_client.files_upload_v2(
-                channel=channel,
-                content=content,
-                filename=filename,
-                title=title or filename
-            )
-
-            if response["ok"]:
-                log.info(
-                    "File uploaded successfully",
-                    extra={"channel": channel, "file_name": filename}
-                )
-                return True
-            else:
-                log.error(
-                    "Slack file upload failed",
-                    extra={"error": response.get("error", "Unknown error")}
-                )
-                return False
-
-        return self._execute_with_error_handling(
+        response = self._execute_with_error_handling(
             "send_file",
-            _upload_operation,
+            lambda: self._upload_file(channel, content, filename, title, thread_ts),
             channel=channel,
-            filename=filename
+            # not `filename`: logging reserves it on LogRecord, and passing it
+            # raises a KeyError that replaces whatever error we were reporting.
+            file_name=filename,
         )
+        return bool(response.get("ok", False))
+
+    @handle_client_errors(default_return=None, reraise=True)
+    def post_file(
+        self,
+        channel: str,
+        content: Any,
+        filename: str,
+        title: Optional[str] = None,
+        thread_ts: Optional[str] = None,
+    ) -> Any:
+        """
+        Upload a file and return Slack's response. Raises.
+
+        Response-returning counterpart of send_file, following the same rule as
+        post_message: it returns on success and raises on every failure. The
+        return is the raw ``files.upload`` response rather than a SentMessage,
+        because an upload has no single message ``ts``; read ``response["files"]``
+        for what was created.
+
+        Args:
+            channel: Channel ID
+            content: File content (str or bytes)
+            filename: File name
+            title: Optional title
+            thread_ts: Optional parent message timestamp, to upload into a thread
+
+        Returns:
+            Slack's ``files.upload`` response.
+
+        Raises:
+            slack_sdk.errors.SlackApiError: Slack rejected the upload. Any other
+                exception from the underlying client propagates too.
+        """
+        return self._execute_with_error_handling(
+            "post_file",
+            lambda: self._upload_file(channel, content, filename, title, thread_ts),
+            channel=channel,
+            # not `filename`: logging reserves it on LogRecord, and passing it
+            # raises a KeyError that replaces whatever error we were reporting.
+            file_name=filename,
+        )
+
+    def _chat_post_thread_reply(
+        self,
+        channel: str,
+        thread_ts: str,
+        text: str,
+        blocks: Optional[List[Dict]],
+        include_lambda_header: bool,
+        event_type: Optional[str],
+    ) -> SentMessage:
+        """Post a thread reply, log the outcome, return Slack's answer.
+
+        Shared by send_thread_reply and post_thread_reply. Note this heads a
+        reply only inside Lambda: unlike a top-level post it has never added the
+        local header, and that is preserved rather than unified.
+        """
+        blocks_with_header = blocks
+        if include_lambda_header and self._lambda_context["function_name"] != "Unknown":
+            header_blocks = self._create_lambda_header_block(event_type=event_type)
+            blocks_with_header = header_blocks + (blocks or [])
+
+        response = self._service_client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text=text,
+            blocks=blocks_with_header,
+        )
+
+        sent = SentMessage(
+            ok=bool(response.get("ok", False)),
+            ts=response.get("ts"),
+            channel=response.get("channel"),
+            response=response,
+        )
+
+        if sent.ok:
+            log.info(
+                "Thread reply sent successfully",
+                extra={"channel": channel, "thread_ts": thread_ts, "reply_ts": sent.ts},
+            )
+        else:
+            log.error("Failed to send thread reply", extra={"error": response.get("error", "Unknown error")})
+        return sent
 
     @handle_client_errors(default_return=False)
     def send_thread_reply(
@@ -678,47 +792,98 @@ class SlackClient(BaseClient, ServiceHealthMixin):
 
         Returns:
             True if successful, False otherwise
-        """
-        def _reply_operation():
-            # Add header if requested (uncommon for thread replies)
-            blocks_with_header = blocks
-            if include_lambda_header and self._lambda_context["function_name"] != "Unknown":
-                header_blocks = self._create_lambda_header_block(event_type=event_type)
-                if blocks:
-                    blocks_with_header = header_blocks + blocks
-                else:
-                    blocks_with_header = header_blocks
 
-            response = self._service_client.chat_postMessage(
+        See Also:
+            post_thread_reply: same arguments, returns Slack's response (with the
+            reply's own ``ts``) instead of a bool, and raises rather than swallowing.
+        """
+        sent = self._execute_with_error_handling(
+            "send_thread_reply",
+            lambda: self._chat_post_thread_reply(
                 channel=channel,
                 thread_ts=thread_ts,
                 text=text,
-                blocks=blocks_with_header
-            )
-
-            if response["ok"]:
-                log.info(
-                    "Thread reply sent successfully",
-                    extra={
-                        "channel": channel,
-                        "thread_ts": thread_ts,
-                        "reply_ts": response["ts"]
-                    }
-                )
-                return True
-            else:
-                log.error(
-                    "Failed to send thread reply",
-                    extra={"error": response.get("error", "Unknown error")}
-                )
-                return False
-
-        return self._execute_with_error_handling(
-            "send_thread_reply",
-            _reply_operation,
+                blocks=blocks,
+                include_lambda_header=include_lambda_header,
+                event_type=event_type,
+            ),
             channel=channel,
-            thread_ts=thread_ts
+            thread_ts=thread_ts,
         )
+        return bool(sent)
+
+    @handle_client_errors(default_return=None, reraise=True)
+    def post_thread_reply(
+        self,
+        channel: str,
+        thread_ts: str,
+        text: str,
+        blocks: Optional[List[Dict]] = None,
+        include_lambda_header: bool = False,
+        event_type: Optional[str] = None,
+    ) -> SentMessage:
+        """
+        Send a thread reply and return Slack's response, including its own ``ts``.
+
+        Response-returning counterpart of send_thread_reply, following the same
+        rule as post_message: it returns on success and raises on every failure,
+        Slack's rejections included. A reply has a ``ts`` of its own, so this is
+        what you want when a later call edits or reacts to the reply itself.
+
+        Args:
+            channel: Channel ID
+            thread_ts: Parent message timestamp
+            text: Reply text
+            blocks: Optional blocks
+            include_lambda_header: Whether to include header
+            event_type: Optional event type label for header (e.g., "Scheduled", "API", "SQS")
+
+        Returns:
+            SentMessage for the reply, whose ``ts`` is the reply's, not the parent's.
+
+        Raises:
+            slack_sdk.errors.SlackApiError: Slack rejected the call. Any other
+                exception from the underlying client propagates too.
+        """
+        return self._execute_with_error_handling(
+            "post_thread_reply",
+            lambda: self._chat_post_thread_reply(
+                channel=channel,
+                thread_ts=thread_ts,
+                text=text,
+                blocks=blocks,
+                include_lambda_header=include_lambda_header,
+                event_type=event_type,
+            ),
+            channel=channel,
+            thread_ts=thread_ts,
+        )
+
+    def _chat_update(
+        self,
+        channel: str,
+        ts: str,
+        text: str,
+        blocks: Optional[List[Dict]],
+    ) -> SentMessage:
+        """Edit a message, log the outcome, return Slack's answer.
+
+        Shared by update_message and post_update.
+        """
+        response = self._service_client.chat_update(channel=channel, ts=ts, text=text, blocks=blocks)
+
+        sent = SentMessage(
+            ok=bool(response.get("ok", False)),
+            ts=response.get("ts"),
+            channel=response.get("channel"),
+            response=response,
+        )
+
+        if sent.ok:
+            log.info("Message updated successfully", extra={"channel": channel, "ts": ts})
+        else:
+            log.error("Failed to update message", extra={"error": response.get("error", "Unknown error")})
+        return sent
 
     @handle_client_errors(default_return=False)
     def update_message(
@@ -730,36 +895,64 @@ class SlackClient(BaseClient, ServiceHealthMixin):
     ) -> bool:
         """
         Update existing message.
-        
+
         Args:
             channel: Channel ID
             ts: Message timestamp
             text: New text
             blocks: New blocks
-            
+
         Returns:
             True if successful, False otherwise
+
+        See Also:
+            post_update: same arguments, returns Slack's response instead of a
+            bool, and raises rather than swallowing.
         """
-        def _update_operation():
-            response = self._service_client.chat_update(
-                channel=channel,
-                ts=ts,
-                text=text,
-                blocks=blocks
-            )
-
-            if response["ok"]:
-                log.info("Message updated successfully", extra={"channel": channel, "ts": ts})
-                return True
-            else:
-                log.error("Failed to update message", extra={"error": response.get("error", "Unknown error")})
-                return False
-
-        return self._execute_with_error_handling(
+        sent = self._execute_with_error_handling(
             "update_message",
-            _update_operation,
+            lambda: self._chat_update(channel=channel, ts=ts, text=text, blocks=blocks),
             channel=channel,
-            ts=ts
+            ts=ts,
+        )
+        return bool(sent)
+
+    @handle_client_errors(default_return=None, reraise=True)
+    def post_update(
+        self,
+        channel: str,
+        ts: str,
+        text: str,
+        blocks: Optional[List[Dict]] = None,
+    ) -> SentMessage:
+        """
+        Edit a message and return Slack's response. Raises.
+
+        Response-returning counterpart of update_message, following the same rule
+        as post_message: it returns on success and raises on every failure. Use
+        it when an edit failing silently would be wrong, or when you need the
+        edited message's fields back.
+
+        Args:
+            channel: Channel ID. Pass the ``channel`` from the original post's
+                SentMessage, not the name you posted to: ``chat.update`` wants
+                the id.
+            ts: Message timestamp
+            text: New text
+            blocks: New blocks
+
+        Returns:
+            SentMessage for the edited message.
+
+        Raises:
+            slack_sdk.errors.SlackApiError: Slack rejected the edit. Any other
+                exception from the underlying client propagates too.
+        """
+        return self._execute_with_error_handling(
+            "post_update",
+            lambda: self._chat_update(channel=channel, ts=ts, text=text, blocks=blocks),
+            channel=channel,
+            ts=ts,
         )
 
     @handle_client_errors(default_return=False)
