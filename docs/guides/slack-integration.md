@@ -155,13 +155,19 @@ slack.send_message(
     text="Your report is ready"
 )
 
-# Send to user by email (requires looking up user first)
-user = slack.get_user_by_email("user@example.com")
+# Send to a user found by email. This client does not look users up, so
+# go through the underlying Slack SDK for that part.
+from slack_sdk import WebClient
+
+lookup = WebClient(token=bot_token).users_lookupByEmail(email="user@example.com")
 slack.send_message(
-    channel=user['id'],
+    channel=lookup["user"]["id"],
     text="Direct message content"
 )
 ```
+
+A post addressed to a user resolves to a DM channel with an id of its own, so
+keep `sent.channel` from `post_message` if you intend to thread, edit or react.
 
 ## Rich Message Formatting
 
@@ -350,45 +356,67 @@ def send_processing_summary(stats: dict):
 
 ## File Uploads
 
+The client uploads content, not paths: read the file yourself and pass the bytes
+or text.
+
 ```python
 from nui_shared_utils import SlackClient
 
 slack = SlackClient()
 
-# Upload file from path
-slack.upload_file(
-    channels="#reports",
-    file_path="/tmp/report.csv",
-    title="Daily Sales Report",
-    initial_comment="Today's sales data attached"
-)
-
-# Upload file content directly
+# Upload file content
 csv_content = "name,value\nItem 1,100\nItem 2,200"
-slack.upload_file(
-    channels="#reports",
-    content=csv_content.encode(),
+slack.send_file(
+    channel="#reports",
+    content=csv_content,
     filename="sales_summary.csv",
     title="Sales Summary"
 )
+
+# Upload from a path by reading it first
+with open("/tmp/report.csv", "rb") as fh:
+    slack.send_file(
+        channel="#reports",
+        content=fh.read(),
+        filename="report.csv",
+        title="Daily Sales Report"
+    )
+```
+
+Pass `thread_ts` to upload into a thread, and use `post_file` when you need the
+upload's response back or want a failure to raise rather than return `False`:
+
+```python
+sent = slack.post_message(channel="#reports", text="Tender results attached")
+response = slack.post_file(
+    channel=sent.channel,
+    content=pdf_bytes,
+    filename="tender.pdf",
+    thread_ts=sent.ts
+)
+file_id = response["files"][0]["id"]
 ```
 
 ## Channel Management
 
-```python
-slack = SlackClient()
+`SlackClient` sends; it does not enumerate or look up channels. Use the Slack SDK
+directly for that, with the same bot token:
 
-# List all channels
-channels = slack.list_channels()
-for channel in channels:
+```python
+from slack_sdk import WebClient
+
+web = WebClient(token=bot_token)
+
+# List channels
+for channel in web.conversations_list()["channels"]:
     print(f"{channel['name']}: {channel['id']}")
 
-# Find channel by name
-channel_id = slack.get_channel_id("general")
-
-# Get channel info
-info = slack.get_channel_info("C1234567890")
+# Channel info by id
+info = web.conversations_info(channel="C1234567890")["channel"]
 ```
+
+To create channels from a YAML definition, see the `slack-channel-setup` CLI
+shipped with this package.
 
 ## Error Handling
 

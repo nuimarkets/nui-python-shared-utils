@@ -1685,3 +1685,39 @@ class TestLogContextKeys:
             slack.post_file("C123", "data", "report.csv")
 
         assert excinfo.value.response["error"] == "invalid_auth"
+
+
+class TestSlackGuideMatchesTheClient:
+    """The guide is how consumers learn this API, so its calls must exist.
+
+    Five documented methods did not: `upload_file`, `get_user_by_email`,
+    `get_channel_id`, `get_channel_info` and `list_channels`, alongside a
+    threading example calling `send_message` with a `thread_ts` argument it does
+    not take. Two consumers hand-rolled `chat.postMessage` against the private
+    `_service_client` rather than use the wrapper, which is what a guide
+    describing an API the package does not have buys you.
+    """
+
+    GUIDE = Path(nui_shared_utils.__file__).parent.parent / "docs" / "guides" / "slack-integration.md"
+
+    def _guide(self):
+        if not self.GUIDE.exists():
+            pytest.skip("docs/ not present in this install")
+        return self.GUIDE.read_text()
+
+    def test_every_documented_method_exists(self):
+        import re
+
+        real = {m for m in dir(SlackClient) if not m.startswith("_")}
+        called = set(re.findall(r"\bslack(?:_client)?\.(\w+)\s*\(", self._guide()))
+        missing = sorted(called - real)
+
+        assert missing == [], f"slack-integration.md calls methods SlackClient does not have: {missing}"
+
+    def test_no_example_passes_thread_ts_to_send_message(self):
+        """send_message has no thread_ts parameter; send_thread_reply is the way."""
+        import re
+
+        guide = self._guide()
+        for match in re.finditer(r"\bslack(?:_client)?\.send_message\((.*?)\)", guide, re.S):
+            assert "thread_ts" not in match.group(1), "send_message takes no thread_ts"
