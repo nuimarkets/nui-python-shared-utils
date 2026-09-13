@@ -8,6 +8,7 @@ pytestmark = pytest.mark.unit
 
 from unittest.mock import patch, Mock
 from slack_sdk.errors import SlackApiError
+from datetime import datetime, timezone
 from nui_shared_utils.slack_client import SlackClient, SentMessage, DEFAULT_ACCOUNT_NAMES
 import os
 
@@ -380,6 +381,34 @@ class TestPostMessage:
 
         assert post_kwargs == send_kwargs
 
+    @patch("nui_shared_utils.slack_client.create_aws_client")
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    @patch.dict(os.environ, {}, clear=True)
+    def test_payload_matches_send_message_on_the_local_header_path(self, mock_webclient, mock_get_secret, mock_boto3):
+        """Parity again outside Lambda, where a different header builder runs.
+
+        The local header embeds a wall-clock minute, so the two calls are pinned
+        to one instant rather than compared across a possible minute rollover.
+        """
+        mock_sts = Mock()
+        mock_boto3.return_value = mock_sts
+        mock_sts.get_caller_identity.side_effect = Exception("Not authenticated")
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+
+        args = dict(channel="C123", text="Test message", blocks=[{"type": "section", "text": {"type": "mrkdwn"}}])
+
+        with patch("nui_shared_utils.slack_client.datetime") as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 1, 1, 12, 34, tzinfo=timezone.utc)
+            slack.send_message(**args)
+            send_kwargs = mock_client.chat_postMessage.call_args.kwargs
+
+            slack.post_message(**args)
+            post_kwargs = mock_client.chat_postMessage.call_args.kwargs
+
+        assert send_kwargs["blocks"][0]["type"] == "context"
+        assert post_kwargs == send_kwargs
+
     @patch("nui_shared_utils.base_client.get_secret")
     @patch("nui_shared_utils.slack_client.WebClient")
     def test_ts_round_trips_into_a_thread_reply(self, mock_webclient, mock_get_secret):
@@ -409,6 +438,12 @@ class TestSentMessage:
         sent = SentMessage(ok=True, ts="1.1")
         with pytest.raises(Exception):
             sent.ts = "2.2"
+
+    def test_is_exported_from_the_package_top_level(self):
+        """The lazy export map is the only thing making this import work."""
+        import nui_shared_utils
+
+        assert nui_shared_utils.SentMessage is SentMessage
 
 
 class TestSendFile:

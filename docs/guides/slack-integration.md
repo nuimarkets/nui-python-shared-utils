@@ -117,8 +117,10 @@ slack.send_thread_reply(
 
 `post_message` returns a `SentMessage` with `ok`, `ts`, `channel` and the raw
 `response`. It is truthy when `ok`, so `if sent:` reads the same way the bool
-return did. It also raises rather than swallowing a `SlackApiError`, so a
-caller can retry a rate-limited send instead of reading an empty result.
+return did. Unlike every other method on this client it raises rather than
+swallowing: `SlackApiError` and any other exception from the underlying client
+reach you, so a caller can retry a rate-limited send instead of reading an empty
+result. Catch broadly, not just `SlackApiError`.
 
 The same `ts` addresses `update_message` and `add_reaction`:
 

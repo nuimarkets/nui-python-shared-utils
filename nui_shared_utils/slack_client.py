@@ -476,6 +476,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
             log.error("Slack API returned error", extra={"error": response.get("error", "Unknown error")})
         return sent
 
+    @handle_client_errors(default_return=None, reraise=True)
     def post_message(
         self,
         channel: str,
@@ -488,20 +489,21 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         unfurl_media: Optional[bool] = None,
     ) -> SentMessage:
         """
-        Send a message and return Slack's response, including the ``ts``.
+        Send a message and return Slack's response, including the ``ts``. Raises.
 
-        Same arguments and same standard header as send_message; the difference
-        is what comes back. send_message answers True/False and discards the
-        ``ts``, which is the only handle send_thread_reply, update_message and
-        add_reaction accept, so a caller that may later thread under, edit or
-        react to its own message wants this one.
+        **This is the one method in this package that does not swallow errors.**
+        Every other client method here logs and returns a default; this one lets
+        the exception reach you, because a caller holding a ``ts`` generally needs
+        to tell a retryable ``SlackApiError`` from a rejection, which a bare False
+        cannot express. Wrap the call accordingly, or use send_message if you want
+        the swallowing behaviour. A response Slack answered but rejected (``ok``
+        false) is returned as ``SentMessage(ok=False)``, not raised.
 
-        Unlike send_message, **this method does not swallow errors**: a caller
-        holding a ``ts`` generally needs to know why a send failed rather than
-        read a bare False, and swallowing would hide a retryable
-        ``SlackApiError`` behind an empty result. A response Slack answered but
-        rejected (``ok`` false) is returned as ``SentMessage(ok=False)``, not
-        raised.
+        Otherwise it is send_message: same arguments, same standard header. The
+        difference is what comes back. send_message answers True/False and
+        discards the ``ts``, which is the only handle send_thread_reply,
+        update_message and add_reaction accept, so a caller that may later thread
+        under, edit or react to its own message wants this one.
 
         Args:
             channel: Channel ID
