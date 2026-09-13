@@ -8,6 +8,7 @@ pytestmark = pytest.mark.unit
 
 from unittest.mock import patch, Mock
 from slack_sdk.errors import SlackApiError
+from slack_sdk.web.slack_response import SlackResponse
 from datetime import datetime, timezone
 from nui_shared_utils.slack_client import SlackClient, SentMessage, DEFAULT_ACCOUNT_NAMES
 import os
@@ -255,8 +256,39 @@ class TestPostMessage:
 
     @patch("nui_shared_utils.base_client.get_secret")
     @patch("nui_shared_utils.slack_client.WebClient")
-    def test_not_ok_is_returned_not_raised(self, mock_webclient, mock_get_secret):
-        """A response Slack answered but rejected comes back as ok=False."""
+    def test_a_real_slack_rejection_raises(self, mock_webclient, mock_get_secret):
+        """ok=false never reaches post_message: slack_sdk validates first.
+
+        This is the production contract, so it is asserted against a genuine
+        SlackResponse rather than the plain-dict double used below. The error
+        detail a caller retries on has to survive on err.response.
+        """
+        slack, mock_client = self._client(mock_webclient, mock_get_secret)
+        rejection = SlackResponse(
+            client=mock_client,
+            http_verb="POST",
+            api_url="https://slack.com/api/chat.postMessage",
+            req_args={},
+            data={"ok": False, "error": "invalid_auth"},
+            headers={},
+            status_code=200,
+        )
+        mock_client.chat_postMessage.side_effect = lambda **kw: rejection.validate()
+
+        with pytest.raises(SlackApiError) as excinfo:
+            slack.post_message("C123", "Test message", include_lambda_header=False)
+
+        assert excinfo.value.response["error"] == "invalid_auth"
+
+    @patch("nui_shared_utils.base_client.get_secret")
+    @patch("nui_shared_utils.slack_client.WebClient")
+    def test_ok_false_from_a_non_validating_client_is_returned(self, mock_webclient, mock_get_secret):
+        """Defensive only: a client that skips validation (a plain-dict double).
+
+        A real client raises instead, which is why the docstring tells callers
+        not to use `if sent:` as a failure guard. send_message converts this
+        same path into its False, which is the behaviour it has always had.
+        """
         slack, _ = self._client(mock_webclient, mock_get_secret, response={"ok": False, "error": "invalid_auth"})
 
         sent = slack.post_message("C123", "Test message", include_lambda_header=False)
@@ -374,11 +406,19 @@ class TestPostMessage:
         )
 
         slack.send_message(**args)
+        assert mock_client.chat_postMessage.call_count == 1
         send_kwargs = mock_client.chat_postMessage.call_args.kwargs
+        mock_client.chat_postMessage.reset_mock()
 
         slack.post_message(**args)
+        assert mock_client.chat_postMessage.call_count == 1, "post_message posted nothing"
         post_kwargs = mock_client.chat_postMessage.call_args.kwargs
 
+        # Equality alone would also hold if both shared a broken helper, so pin
+        # the payload that matters as well.
+        assert send_kwargs["blocks"][0]["type"] == "context"
+        assert send_kwargs["blocks"][-1]["text"]["text"] == "Body"
+        assert send_kwargs["unfurl_links"] is False
         assert post_kwargs == send_kwargs
 
     @patch("nui_shared_utils.slack_client.create_aws_client")
@@ -401,9 +441,12 @@ class TestPostMessage:
         with patch("nui_shared_utils.slack_client.datetime") as mock_dt:
             mock_dt.now.return_value = datetime(2026, 1, 1, 12, 34, tzinfo=timezone.utc)
             slack.send_message(**args)
+            assert mock_client.chat_postMessage.call_count == 1
             send_kwargs = mock_client.chat_postMessage.call_args.kwargs
+            mock_client.chat_postMessage.reset_mock()
 
             slack.post_message(**args)
+            assert mock_client.chat_postMessage.call_count == 1, "post_message posted nothing"
             post_kwargs = mock_client.chat_postMessage.call_args.kwargs
 
         assert send_kwargs["blocks"][0]["type"] == "context"

@@ -109,26 +109,42 @@ sent = slack.post_message(
 
 # Reply in thread
 slack.send_thread_reply(
-    channel="#support",
+    channel=sent.channel,
     thread_ts=sent.ts,
     text="Ticket assigned to engineering team"
 )
 ```
 
 `post_message` returns a `SentMessage` with `ok`, `ts`, `channel` and the raw
-`response`. It is truthy when `ok`, so `if sent:` reads the same way the bool
-return did. Unlike every other method on this client it raises rather than
-swallowing: `SlackApiError` and any other exception from the underlying client
-reach you, so a caller can retry a rate-limited send instead of reading an empty
-result. Catch broadly, not just `SlackApiError`.
+`response`.
+
+Unlike every other method on this client it raises rather than swallowing, and it
+raises on *every* failure including Slack's own rejections: `slack_sdk` validates
+each response, so `{"ok": false, ...}` arrives as a `SlackApiError` carrying the
+error code, status and retry headers on `err.response`. A returned `SentMessage`
+therefore always succeeded. Handle failure with `except`, not with `if sent:`,
+and catch broadly rather than only `SlackApiError`:
+
+```python
+try:
+    sent = slack.post_message(channel="#support", text="New support ticket")
+except SlackApiError as e:
+    log.error("Slack rejected the post: %s", e.response["error"])
+    raise
+```
 
 The same `ts` addresses `update_message` and `add_reaction`:
 
 ```python
 sent = slack.post_message(channel="#deployments", text="Deploy started")
-slack.update_message(channel="#deployments", ts=sent.ts, text="Deploy finished")
-slack.add_reaction(channel="#deployments", ts=sent.ts, emoji="white_check_mark")
+slack.update_message(channel=sent.channel, ts=sent.ts, text="Deploy finished")
+slack.add_reaction(channel=sent.channel, ts=sent.ts, emoji="white_check_mark")
 ```
+
+Pass `sent.channel`, not the value you posted to. `chat.postMessage` accepts a
+channel name, while `chat.update` and `reactions.add` want the id, and a post
+addressed to a user id resolves to a DM channel with a different id again. Both
+follow-up calls swallow their failures, so getting this wrong is silent.
 
 ### Direct Messages
 
@@ -294,7 +310,7 @@ def send_error_alert(error: Exception, context: dict):
 
     # Add stack trace in thread to avoid clutter
     slack.send_thread_reply(
-        channel="#alerts-critical",
+        channel=sent.channel,
         thread_ts=sent.ts,
         text=f"```{error_details}```"
     )
@@ -435,7 +451,7 @@ Slack has rate limits:
 ```python
 # Good: Use threading for related messages
 sent = slack.post_message(channel="#support", text="Main message")
-slack.send_thread_reply(channel="#support", thread_ts=sent.ts, text="Details")
+slack.send_thread_reply(channel=sent.channel, thread_ts=sent.ts, text="Details")
 
 # Avoid: Flooding channel with sequential messages
 for item in items:  # Could hit rate limit

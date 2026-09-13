@@ -42,8 +42,12 @@ class SentMessage:
     which is why :meth:`SlackClient.post_message` exists alongside the
     bool-returning :meth:`SlackClient.send_message`.
 
-    Truthiness follows ``ok``, so ``if client.post_message(...):`` reads the
-    same way the bool-returning call did.
+    Truthiness follows ``ok``. Note that a SentMessage returned by
+    :meth:`SlackClient.post_message` against a real client is always ``ok``,
+    because ``slack_sdk`` raises on a rejection rather than returning one, so
+    ``if sent:`` is not a failure guard there. ``ok`` earns its place for a
+    client that does not validate, and for :meth:`SlackClient.send_message`,
+    which converts this type into its bool.
 
     Attributes:
         ok: Whether Slack accepted the message.
@@ -494,10 +498,18 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         **This is the one method in this package that does not swallow errors.**
         Every other client method here logs and returns a default; this one lets
         the exception reach you, because a caller holding a ``ts`` generally needs
-        to tell a retryable ``SlackApiError`` from a rejection, which a bare False
-        cannot express. Wrap the call accordingly, or use send_message if you want
-        the swallowing behaviour. A response Slack answered but rejected (``ok``
-        false) is returned as ``SentMessage(ok=False)``, not raised.
+        the rejection code, HTTP status and retry headers that a bare False cannot
+        express. Wrap the call accordingly, or use send_message if you want the
+        swallowing behaviour.
+
+        **It returns on success and raises on every failure**, Slack's own
+        rejections included: ``slack_sdk`` validates each response before handing
+        it back, so ``{"ok": false, "error": ...}`` arrives as a ``SlackApiError``
+        carrying that detail on ``err.response``, never as a returned value. So do
+        not write ``if sent:`` as a failure guard, because it never runs; catch
+        instead. (``SentMessage.ok`` stays for defensive handling of a client that
+        does not validate, such as a test double returning a plain dict; against a
+        real client a returned SentMessage is always ``ok``.)
 
         Otherwise it is send_message: same arguments, same standard header. The
         difference is what comes back. send_message answers True/False and
@@ -521,14 +533,14 @@ class SlackClient(BaseClient, ServiceHealthMixin):
             SentMessage carrying ok, ts, channel and the raw response.
 
         Raises:
-            slack_sdk.errors.SlackApiError: Slack rejected the call at the
-                transport/API layer. Any other exception raised by the
-                underlying client propagates too.
+            slack_sdk.errors.SlackApiError: Slack rejected the call, at the
+                transport layer or by answering ``ok: false``. ``err.response``
+                carries the error code, status and any retry headers. Any other
+                exception raised by the underlying client propagates too.
 
         Example:
             sent = client.post_message("C123", "Build started")
-            if sent:
-                client.send_thread_reply("C123", sent.ts, "Build finished")
+            client.send_thread_reply(sent.channel, sent.ts, "Build finished")
         """
         return self._execute_with_error_handling(
             "post_message",
