@@ -350,7 +350,7 @@ class TestPostMessage:
     @patch("nui_shared_utils.slack_client.WebClient")
     @patch.dict(os.environ, {"AWS_LAMBDA_FUNCTION_NAME": "test-function", "STAGE": "prod"})
     def test_header_can_be_disabled(self, mock_webclient, mock_get_secret, mock_boto3):
-        """cream-sync posts its first trade notification without a header."""
+        """Callers that head their own messages post with the header off."""
         mock_sts = Mock()
         mock_boto3.return_value = mock_sts
         mock_sts.get_caller_identity.return_value = {"Account": "123456789012"}
@@ -1709,7 +1709,8 @@ class TestSlackGuideMatchesTheClient:
         import re
 
         real = {m for m in dir(SlackClient) if not m.startswith("_")}
-        called = set(re.findall(r"\bslack(?:_client)?\.(\w+)\s*\(", self._guide()))
+        pattern = r"(?:\bslack(?:_client)?|SlackClient\(\))\.(\w+)\s*\("
+        called = set(re.findall(pattern, self._guide()))
         missing = sorted(called - real)
 
         assert missing == [], f"slack-integration.md calls methods SlackClient does not have: {missing}"
@@ -1719,5 +1720,33 @@ class TestSlackGuideMatchesTheClient:
         import re
 
         guide = self._guide()
-        for match in re.finditer(r"\bslack(?:_client)?\.send_message\((.*?)\)", guide, re.S):
+        pattern = r"(?:\bslack(?:_client)?|SlackClient\(\))\.send_message\((.*?)\)"
+        for match in re.finditer(pattern, guide, re.S):
             assert "thread_ts" not in match.group(1), "send_message takes no thread_ts"
+
+    def test_no_example_catches_around_a_swallowing_call(self):
+        """A try/except around a `send_*` call is an except block that never runs.
+
+        The guide had two: a `with_retry` wrapper whose retry could not fire, and
+        a fallback whose `except Exception` was dead. Both read as working error
+        handling, so the failure they claim to handle is silently unhandled. Any
+        example that handles failure by catching has to call a raising `post_*`.
+        """
+        import re
+
+        swallowing = ("send_message", "send_thread_reply", "update_message", "send_file", "add_reaction")
+        offenders = []
+        for block in re.findall(r"```python\n(.*?)```", self._guide(), re.S):
+            # A real except clause opens a line; the word inside prose or a
+            # comment does not count.
+            if not re.search(r"^\s*except\b", block, re.M):
+                continue
+            for method in swallowing:
+                # any receiver: `slack.`, `slack_client.`, `SlackClient().`
+                if re.search(rf"\.{method}\s*\(", block):
+                    offenders.append(method)
+
+        assert offenders == [], (
+            f"guide catches exceptions around methods that swallow them: {offenders}. "
+            "Use a post_* method, or test the boolean return instead."
+        )

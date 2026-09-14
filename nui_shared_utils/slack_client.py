@@ -492,7 +492,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
             log.error("Slack API returned error", extra={"error": response.get("error", "Unknown error")})
         return sent
 
-    @handle_client_errors(default_return=None, reraise=True)
+    @handle_client_errors(reraise=True)
     def post_message(
         self,
         channel: str,
@@ -507,12 +507,12 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         """
         Send a message and return Slack's response, including the ``ts``. Raises.
 
-        **This is the one method in this package that does not swallow errors.**
-        Every other client method here logs and returns a default; this one lets
-        the exception reach you, because a caller holding a ``ts`` generally needs
-        the rejection code, HTTP status and retry headers that a bare False cannot
-        express. Wrap the call accordingly, or use send_message if you want the
-        swallowing behaviour.
+        **Like every ``post_*`` method here, it raises rather than swallowing.**
+        The ``send_*`` / ``update_message`` family logs and returns a default
+        instead; this one lets the exception reach you, because a caller holding
+        a ``ts`` generally needs the rejection code, HTTP status and retry headers
+        that a bare False cannot express. Wrap the call accordingly, or use
+        send_message if you want the swallowing behaviour.
 
         **It returns on success and raises on every failure**, Slack's own
         rejections included: ``slack_sdk`` validates each response before handing
@@ -685,7 +685,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         )
         return bool(response.get("ok", False))
 
-    @handle_client_errors(default_return=None, reraise=True)
+    @handle_client_errors(reraise=True)
     def post_file(
         self,
         channel: str,
@@ -812,7 +812,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         )
         return bool(sent)
 
-    @handle_client_errors(default_return=None, reraise=True)
+    @handle_client_errors(reraise=True)
     def post_thread_reply(
         self,
         channel: str,
@@ -917,7 +917,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         )
         return bool(sent)
 
-    @handle_client_errors(default_return=None, reraise=True)
+    @handle_client_errors(reraise=True)
     def post_update(
         self,
         channel: str,

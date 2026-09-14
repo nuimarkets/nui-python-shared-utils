@@ -131,6 +131,9 @@ try:
 except SlackApiError as e:
     log.error("Slack rejected the post: %s", e.response["error"])
     raise
+except Exception:
+    log.exception("Slack post failed before Slack answered")
+    raise
 ```
 
 The same `ts` addresses `update_message` and `add_reaction`:
@@ -429,7 +432,9 @@ from nui_shared_utils import with_retry, SlackClient
 def send_critical_alert(message: str):
     """Send message with automatic retry on failure."""
     slack = SlackClient()
-    slack.send_message(channel="#alerts", text=message)
+    # post_message, not send_message: `with_retry` retries a raised exception,
+    # and send_message swallows its errors into a False the retry never sees.
+    slack.post_message(channel="#alerts", text=message)
 ```
 
 ### Graceful Degradation
@@ -439,11 +444,22 @@ from nui_shared_utils import SlackClient
 
 def notify_with_fallback(message: str):
     """Try Slack notification with fallback to logging."""
+    slack = SlackClient()
+    if not slack.send_message(channel="#notifications", text=message):
+        # Fallback to CloudWatch logs. send_message reports failure by
+        # returning False, so testing the return is what catches it; wrapping
+        # this call in try/except would give you an except block that can
+        # never run.
+        print(f"Slack notification failed, message content: {message}")
+```
+
+Use `post_message` instead when you want the reason rather than just the fact:
+
+```python
+def notify_with_fallback(message: str):
     try:
-        slack = SlackClient()
-        slack.send_message(channel="#notifications", text=message)
+        SlackClient().post_message(channel="#notifications", text=message)
     except Exception as e:
-        # Fallback to CloudWatch logs
         print(f"Slack notification failed: {e}")
         print(f"Message content: {message}")
 ```
