@@ -87,6 +87,7 @@ _LAZY_EXPORTS = {
     "get_lambda_environment_info": ("lambda_helpers", "get_lambda_environment_info"),
     # Optional: Slack client (slack-sdk)
     "SlackClient": ("slack_client", "SlackClient"),
+    "SentMessage": ("slack_client", "SentMessage"),
     # Optional: Elasticsearch client + query builder
     "ElasticsearchClient": ("es_client", "ElasticsearchClient"),
     "ESQueryBuilder": ("es_query_builder", "ESQueryBuilder"),
@@ -265,7 +266,7 @@ if TYPE_CHECKING:
         extract_cloudwatch_logs_from_kinesis,
     )
     from .lambda_helpers import get_lambda_environment_info
-    from .slack_client import SlackClient
+    from .slack_client import SentMessage, SlackClient
     from .es_client import ElasticsearchClient
     from .es_query_builder import (
         ESQueryBuilder,

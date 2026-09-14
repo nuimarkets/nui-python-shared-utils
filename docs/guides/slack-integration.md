@@ -94,23 +94,83 @@ slack.send_message(
 )
 ```
 
+### Two families of write method
+
+Every write has two forms, differing only in what they hand back:
+
+| Operation | Returns a bool, swallows errors | Returns Slack's answer, raises |
+|---|---|---|
+| Post a message | `send_message` | `post_message` |
+| Reply in a thread | `send_thread_reply` | `post_thread_reply` |
+| Edit a message | `update_message` | `post_update` |
+| Upload a file | `send_file` | `post_file` |
+| Add a reaction | `add_reaction` | (none) |
+
+Reach for a `post_*` method when you need the message's `ts`, which is the only
+handle a thread reply, edit or reaction accepts, or when you need the reason
+behind a failure. Keep the bool-returning ones when a failed notification should
+not take the caller down with it.
+
+The `post_*` methods return a `SentMessage` (`ok`, `ts`, `channel`, and the raw
+`response`), except `post_file`, which returns the upload's completion response
+because an upload has no single message `ts`.
+
 ### Message Threading
 
+Threading needs the parent message's `ts`, so post it with `post_message`
+rather than `send_message`: the two take the same arguments and add the same
+header, but `send_message` answers a bare `True`/`False` and drops the `ts`.
+
 ```python
-# Send initial message
-response = slack.send_message(
+# Send initial message, keeping Slack's response
+sent = slack.post_message(
     channel="#support",
     text="New support ticket received"
 )
 
 # Reply in thread
-thread_ts = response['ts']
-slack.send_message(
-    channel="#support",
-    text="Ticket assigned to engineering team",
-    thread_ts=thread_ts
+slack.send_thread_reply(
+    channel=sent.channel,
+    thread_ts=sent.ts,
+    text="Ticket assigned to engineering team"
 )
 ```
+
+`post_message` returns a `SentMessage` with `ok`, `ts`, `channel` and the raw
+`response`.
+
+Like every `post_*` method here, it raises rather than swallowing, and it raises
+on *every* failure including Slack's own rejections: `slack_sdk` validates
+each response, so `{"ok": false, ...}` arrives as a `SlackApiError` carrying the
+error code, status and retry headers on `err.response`. A returned `SentMessage`
+therefore always succeeded. Handle failure with `except`, not with `if sent:`,
+and catch broadly rather than only `SlackApiError`:
+
+```python
+from slack_sdk.errors import SlackApiError
+
+try:
+    sent = slack.post_message(channel="#support", text="New support ticket")
+except SlackApiError as e:
+    log.error("Slack rejected the post: %s", e.response["error"])
+    raise
+except Exception:
+    log.exception("Slack post failed before Slack answered")
+    raise
+```
+
+The same `ts` addresses `update_message` and `add_reaction`:
+
+```python
+sent = slack.post_message(channel="#deployments", text="Deploy started")
+slack.update_message(channel=sent.channel, ts=sent.ts, text="Deploy finished")
+slack.add_reaction(channel=sent.channel, ts=sent.ts, emoji="white_check_mark")
+```
+
+Pass `sent.channel`, not the value you posted to. `chat.postMessage` accepts a
+channel name, while `chat.update` and `reactions.add` want the id, and a post
+addressed to a user id resolves to a DM channel with a different id again. Both
+follow-up calls swallow their failures, so getting this wrong is silent.
 
 ### Direct Messages
 
@@ -121,13 +181,19 @@ slack.send_message(
     text="Your report is ready"
 )
 
-# Send to user by email (requires looking up user first)
-user = slack.get_user_by_email("user@example.com")
+# Send to a user found by email. This client does not look users up, so
+# go through the underlying Slack SDK for that part.
+from slack_sdk import WebClient
+
+lookup = WebClient(token=bot_token).users_lookupByEmail(email="user@example.com")
 slack.send_message(
-    channel=user['id'],
+    channel=lookup["user"]["id"],
     text="Direct message content"
 )
 ```
+
+A post addressed to a user resolves to a DM channel with an id of its own, so
+keep `sent.channel` from `post_message` if you intend to thread, edit or react.
 
 ## Rich Message Formatting
 
@@ -154,7 +220,7 @@ blocks = (builder
 )
 
 # Send formatted message
-slack.send_message(channel="#deployments", blocks=blocks)
+slack.send_message(channel="#deployments", text="Deployment update", blocks=blocks)
 ```
 
 ### Block Types
@@ -235,6 +301,7 @@ def send_execution_report(event, context, results):
 
     slack.send_message(
         channel="#lambda-executions",
+        text=f"{context.function_name} execution report",
         blocks=blocks
     )
 ```
@@ -268,16 +335,17 @@ def send_error_alert(error: Exception, context: dict):
     )
 
     # Send to alerts channel
-    response = slack.send_message(
+    sent = slack.post_message(
         channel="#alerts-critical",
+        text="Critical error",
         blocks=blocks
     )
 
     # Add stack trace in thread to avoid clutter
-    slack.send_message(
-        channel="#alerts-critical",
-        text=f"```{error_details}```",
-        thread_ts=response['ts']
+    slack.send_thread_reply(
+        channel=sent.channel,
+        thread_ts=sent.ts,
+        text=f"```{error_details}```"
     )
 ```
 
@@ -310,50 +378,74 @@ def send_processing_summary(stats: dict):
         .build()
     )
 
-    slack.send_message(channel="#data-pipeline", blocks=blocks)
+    slack.send_message(channel="#data-pipeline", text="Pipeline summary", blocks=blocks)
 ```
 
 ## File Uploads
+
+The client uploads content, not paths: read the file yourself and pass the bytes
+or text.
 
 ```python
 from nui_shared_utils import SlackClient
 
 slack = SlackClient()
 
-# Upload file from path
-slack.upload_file(
-    channels="#reports",
-    file_path="/tmp/report.csv",
-    title="Daily Sales Report",
-    initial_comment="Today's sales data attached"
-)
-
-# Upload file content directly
+# Upload file content. Uploads need a channel ID, not a name: the SDK passes
+# this straight to files.completeUploadExternal as `channel_id`, so "#reports"
+# uploads the bytes and then fails to share them, returning False.
 csv_content = "name,value\nItem 1,100\nItem 2,200"
-slack.upload_file(
-    channels="#reports",
-    content=csv_content.encode(),
+slack.send_file(
+    channel="C1234567890",
+    content=csv_content,
     filename="sales_summary.csv",
     title="Sales Summary"
 )
+
+# Upload from a path by reading it first
+with open("/tmp/report.csv", "rb") as fh:
+    slack.send_file(
+        channel="C1234567890",
+        content=fh.read(),
+        filename="report.csv",
+        title="Daily Sales Report"
+    )
+```
+
+Pass `thread_ts` to upload into a thread, and use `post_file` when you need the
+upload's response back or want a failure to raise rather than return `False`:
+
+```python
+sent = slack.post_message(channel="#reports", text="Tender results attached")
+response = slack.post_file(
+    channel=sent.channel,
+    content=pdf_bytes,
+    filename="tender.pdf",
+    thread_ts=sent.ts
+)
+file_id = response["files"][0]["id"]
 ```
 
 ## Channel Management
 
-```python
-slack = SlackClient()
+`SlackClient` sends; it does not enumerate or look up channels. Use the Slack SDK
+directly for that, with the same bot token:
 
-# List all channels
-channels = slack.list_channels()
-for channel in channels:
+```python
+from slack_sdk import WebClient
+
+web = WebClient(token=bot_token)
+
+# List channels
+for channel in web.conversations_list()["channels"]:
     print(f"{channel['name']}: {channel['id']}")
 
-# Find channel by name
-channel_id = slack.get_channel_id("general")
-
-# Get channel info
-info = slack.get_channel_info("C1234567890")
+# Channel info by id
+info = web.conversations_info(channel="C1234567890")["channel"]
 ```
+
+To create channels from a YAML definition, see the `slack-channel-setup` CLI
+shipped with this package.
 
 ## Error Handling
 
@@ -362,11 +454,13 @@ info = slack.get_channel_info("C1234567890")
 ```python
 from nui_shared_utils import with_retry, SlackClient
 
-@with_retry(max_attempts=3, backoff_factor=2)
+@with_retry(max_attempts=3, exponential_base=2)
 def send_critical_alert(message: str):
     """Send message with automatic retry on failure."""
     slack = SlackClient()
-    slack.send_message(channel="#alerts", text=message)
+    # post_message, not send_message: `with_retry` retries a raised exception,
+    # and send_message swallows its errors into a False the retry never sees.
+    slack.post_message(channel="#alerts", text=message)
 ```
 
 ### Graceful Degradation
@@ -376,11 +470,22 @@ from nui_shared_utils import SlackClient
 
 def notify_with_fallback(message: str):
     """Try Slack notification with fallback to logging."""
+    slack = SlackClient()
+    if not slack.send_message(channel="#notifications", text=message):
+        # Fallback to CloudWatch logs. send_message reports failure by
+        # returning False, so testing the return is what catches it; wrapping
+        # this call in try/except would give you an except block that can
+        # never run.
+        print(f"Slack notification failed, message content: {message}")
+```
+
+Use `post_message` instead when you want the reason rather than just the fact:
+
+```python
+def notify_with_fallback(message: str):
     try:
-        slack = SlackClient()
-        slack.send_message(channel="#notifications", text=message)
+        SlackClient().post_message(channel="#notifications", text=message)
     except Exception as e:
-        # Fallback to CloudWatch logs
         print(f"Slack notification failed: {e}")
         print(f"Message content: {message}")
 ```
@@ -415,8 +520,8 @@ Slack has rate limits:
 
 ```python
 # Good: Use threading for related messages
-response = slack.send_message(channel="#support", text="Main message")
-slack.send_message(channel="#support", text="Details", thread_ts=response['ts'])
+sent = slack.post_message(channel="#support", text="Main message")
+slack.send_thread_reply(channel=sent.channel, thread_ts=sent.ts, text="Details")
 
 # Avoid: Flooding channel with sequential messages
 for item in items:  # Could hit rate limit
