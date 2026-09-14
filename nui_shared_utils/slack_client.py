@@ -5,10 +5,11 @@ Refactored Slack client using BaseClient for DRY code patterns.
 import os
 import logging
 from dataclasses import dataclass
-from typing import Any, List, Dict, Optional
+from typing import Any, List, Dict, Optional, Union
 from pathlib import Path
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
+from slack_sdk.web.slack_response import SlackResponse
 from datetime import datetime
 
 try:
@@ -78,6 +79,8 @@ class SlackClient(BaseClient, ServiceHealthMixin):
       ``send_file`` / ``add_reaction`` return a bool and swallow every error.
     - ``post_message`` / ``post_thread_reply`` / ``post_update`` / ``post_file``
       return Slack's answer and **raise** on every failure, rejections included.
+      The shared ``post_`` prefix marks that return contract, not the Slack call:
+      ``post_update`` edits a message in place rather than posting a new one.
 
     Reach for a ``post_*`` method when you need the message's ``ts`` (the only
     handle an edit, reaction or thread reply accepts) or the error detail behind
@@ -622,11 +625,11 @@ class SlackClient(BaseClient, ServiceHealthMixin):
     def _upload_file(
         self,
         channel: str,
-        content: Any,
+        content: Union[str, bytes],
         filename: str,
         title: Optional[str],
         thread_ts: Optional[str],
-    ) -> Any:
+    ) -> SlackResponse:
         """Upload a file and log the outcome, returning Slack's raw response.
 
         Shared by send_file and post_file. Unlike the message helpers this does
@@ -654,7 +657,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
     def send_file(
         self,
         channel: str,
-        content: Any,
+        content: Union[str, bytes],
         filename: str,
         title: Optional[str] = None,
         thread_ts: Optional[str] = None,
@@ -663,7 +666,9 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         Upload file to Slack channel.
 
         Args:
-            channel: Channel ID
+            channel: Channel ID. A name will not do: the SDK forwards this as
+                ``channel_id`` to ``files.completeUploadExternal``, so a name
+                uploads the bytes and then fails to share them.
             content: File content (str or bytes)
             filename: File name
             title: Optional title
@@ -689,29 +694,31 @@ class SlackClient(BaseClient, ServiceHealthMixin):
     def post_file(
         self,
         channel: str,
-        content: Any,
+        content: Union[str, bytes],
         filename: str,
         title: Optional[str] = None,
         thread_ts: Optional[str] = None,
-    ) -> Any:
+    ) -> SlackResponse:
         """
         Upload a file and return Slack's response. Raises.
 
         Response-returning counterpart of send_file, following the same rule as
         post_message: it returns on success and raises on every failure. The
-        return is the raw ``files.upload`` response rather than a SentMessage,
-        because an upload has no single message ``ts``; read ``response["files"]``
-        for what was created.
+        return is ``files_upload_v2``'s completion response rather than a
+        SentMessage, because an upload has no single message ``ts``; read
+        ``response["files"]`` for what was created.
 
         Args:
-            channel: Channel ID
+            channel: Channel ID. A name will not do: the SDK forwards this as
+                ``channel_id`` to ``files.completeUploadExternal``, so a name
+                uploads the bytes and then fails to share them.
             content: File content (str or bytes)
             filename: File name
             title: Optional title
             thread_ts: Optional parent message timestamp, to upload into a thread
 
         Returns:
-            Slack's ``files.upload`` response.
+            ``files_upload_v2``'s completion response.
 
         Raises:
             slack_sdk.errors.SlackApiError: Slack rejected the upload. Any other
@@ -926,9 +933,10 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         blocks: Optional[List[Dict]] = None,
     ) -> SentMessage:
         """
-        Edit a message and return Slack's response. Raises.
+        Edit an existing message in place and return Slack's response. Raises.
 
-        Response-returning counterpart of update_message, following the same rule
+        This edits; it does not post anything new, despite the ``post_`` prefix
+        the response-returning family shares. Counterpart of update_message, following the same rule
         as post_message: it returns on success and raises on every failure. Use
         it when an edit failing silently would be wrong, or when you need the
         edited message's fields back.

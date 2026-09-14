@@ -559,7 +559,10 @@ class TestPostThreadReply:
         post_kwargs = mock_client.chat_postMessage.call_args.kwargs
 
         assert send_kwargs["thread_ts"] == "111.1"
+        assert send_kwargs["channel"] == "C123"
+        assert send_kwargs["text"] == "Reply"
         assert send_kwargs["blocks"][0]["type"] == "context"
+        assert send_kwargs["blocks"][-1]["text"]["text"] == "Body"
         assert post_kwargs == send_kwargs
 
 
@@ -616,8 +619,12 @@ class TestPostUpdate:
         slack.post_update(**args)
         assert mock_client.chat_update.call_count == 1, "post_update updated nothing"
 
-        assert send_kwargs["ts"] == "111.1"
-        assert mock_client.chat_update.call_args.kwargs == send_kwargs
+        # Pin the whole payload, not just parity: two methods sharing a broken
+        # helper agree with each other perfectly (verified: dropping `blocks`
+        # inside _chat_update left every update test green before this).
+        expected = {"channel": "C999", "ts": "111.1", "text": "Edited", "blocks": [{"type": "section"}]}
+        assert send_kwargs == expected
+        assert mock_client.chat_update.call_args.kwargs == expected
 
 
 class TestPostFile:
@@ -1653,21 +1660,51 @@ class TestLogContextKeys:
         became a KeyError, which the swallowing decorator turned into a bare
         False. The raising post_* family surfaces it instead, so it has to be
         impossible rather than merely unnoticed.
+
+        Parsed rather than pattern-matched: a regex over the source missed
+        single-quoted keys, single-line calls and anything after a multiline
+        lambda, and flagged reserved names nested inside a value, where they
+        do not collide.
         """
+        import ast
         import logging as _logging
-        import re
 
         reserved = set(_logging.LogRecord("n", 1, "p", 1, "m", None, None).__dict__)
         reserved |= {"message", "asctime", "taskName"}
 
-        source = Path(nui_shared_utils.__file__).parent
+        def top_level_keys(node):
+            """Keys of a dict literal, which are the only ones that collide."""
+            if not isinstance(node, ast.Dict):
+                return []
+            return [k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)]
+
         offenders = []
-        for path in sorted(source.rglob("*.py")):
-            src = path.read_text()
-            for match in re.finditer(r"extra=\{([^}]*)\}", src, re.S):
-                offenders += [(path.name, k) for k in re.findall(r'"(\w+)"\s*:', match.group(1)) if k in reserved]
-            for match in re.finditer(r"_execute_with_error_handling\((.*?)\n\s*\)", src, re.S):
-                offenders += [(path.name, k) for k in re.findall(r"\n\s*(\w+)=", match.group(1)) if k in reserved]
+        for path in sorted(Path(nui_shared_utils.__file__).parent.rglob("*.py")):
+            tree = ast.parse(path.read_text(), filename=str(path))
+            # `extra=` dict literals assigned to a name, then passed through
+            assigned = {}
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict):
+                    for target in node.targets:
+                        if isinstance(target, ast.Name):
+                            assigned[target.id] = node.value
+
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                callee = node.func.attr if isinstance(node.func, ast.Attribute) else None
+                for kw in node.keywords:
+                    if kw.arg is None:
+                        continue
+                    # log.*(extra={...}) or log.*(extra=some_dict_name)
+                    if kw.arg == "extra":
+                        value = kw.value
+                        if isinstance(value, ast.Name):
+                            value = assigned.get(value.id)
+                        offenders += [(path.name, node.lineno, k) for k in top_level_keys(value) if k in reserved]
+                    # kwargs to _execute_with_error_handling become log context
+                    elif callee == "_execute_with_error_handling" and kw.arg in reserved:
+                        offenders.append((path.name, node.lineno, kw.arg))
 
         assert offenders == [], f"reserved LogRecord keys used as log context: {offenders}"
 
@@ -1705,15 +1742,42 @@ class TestSlackGuideMatchesTheClient:
             pytest.skip("docs/ not present in this install")
         return self.GUIDE.read_text()
 
-    def test_every_documented_method_exists(self):
+    CALL = r"(?:\bslack(?:_client)?|SlackClient\(\))\.(\w+)\(([^()]*(?:\([^()]*\)[^()]*)*)\)"
+
+    def _documented_calls(self):
         import re
 
+        for match in re.finditer(self.CALL, self._guide(), re.S):
+            yield match.group(1), match.group(2), self._guide()[: match.start()].count("\n") + 1
+
+    def test_every_documented_method_exists(self):
         real = {m for m in dir(SlackClient) if not m.startswith("_")}
-        pattern = r"(?:\bslack(?:_client)?|SlackClient\(\))\.(\w+)\s*\("
-        called = set(re.findall(pattern, self._guide()))
-        missing = sorted(called - real)
+        missing = sorted({name for name, _, _ in self._documented_calls()} - real)
 
         assert missing == [], f"slack-integration.md calls methods SlackClient does not have: {missing}"
+
+    def test_every_documented_call_matches_the_signature(self):
+        """Existing is not enough; the arguments have to bind.
+
+        Three examples omitted `text`, which send_message requires, so copying
+        them raised TypeError. A name-only check passed all three.
+        """
+        import inspect
+        import re
+
+        failures = []
+        for name, args, line in self._documented_calls():
+            method = getattr(SlackClient, name, None)
+            if method is None:
+                continue  # the name check above owns this case
+            keywords = re.findall(r"(\w+)\s*=", args)
+            positional = len([a for a in args.split(",") if a.strip() and "=" not in a])
+            try:
+                inspect.signature(method).bind(None, *["x"] * positional, **{k: "x" for k in keywords})
+            except TypeError as exc:
+                failures.append(f"line {line}: {name}(...) {exc}")
+
+        assert failures == [], "slack-integration.md examples do not match the signatures:\n" + "\n".join(failures)
 
     def test_no_example_passes_thread_ts_to_send_message(self):
         """send_message has no thread_ts parameter; send_thread_reply is the way."""

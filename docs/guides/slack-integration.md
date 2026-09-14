@@ -126,6 +126,8 @@ therefore always succeeded. Handle failure with `except`, not with `if sent:`,
 and catch broadly rather than only `SlackApiError`:
 
 ```python
+from slack_sdk.errors import SlackApiError
+
 try:
     sent = slack.post_message(channel="#support", text="New support ticket")
 except SlackApiError as e:
@@ -197,7 +199,7 @@ blocks = (builder
 )
 
 # Send formatted message
-slack.send_message(channel="#deployments", blocks=blocks)
+slack.send_message(channel="#deployments", text="Deployment update", blocks=blocks)
 ```
 
 ### Block Types
@@ -278,6 +280,7 @@ def send_execution_report(event, context, results):
 
     slack.send_message(
         channel="#lambda-executions",
+        text=f"{function_name} execution report",
         blocks=blocks
     )
 ```
@@ -354,7 +357,7 @@ def send_processing_summary(stats: dict):
         .build()
     )
 
-    slack.send_message(channel="#data-pipeline", blocks=blocks)
+    slack.send_message(channel="#data-pipeline", text="Pipeline summary", blocks=blocks)
 ```
 
 ## File Uploads
@@ -367,10 +370,12 @@ from nui_shared_utils import SlackClient
 
 slack = SlackClient()
 
-# Upload file content
+# Upload file content. Uploads need a channel ID, not a name: the SDK passes
+# this straight to files.completeUploadExternal as `channel_id`, so "#reports"
+# uploads the bytes and then fails to share them, returning False.
 csv_content = "name,value\nItem 1,100\nItem 2,200"
 slack.send_file(
-    channel="#reports",
+    channel="C1234567890",
     content=csv_content,
     filename="sales_summary.csv",
     title="Sales Summary"
@@ -379,7 +384,7 @@ slack.send_file(
 # Upload from a path by reading it first
 with open("/tmp/report.csv", "rb") as fh:
     slack.send_file(
-        channel="#reports",
+        channel="C1234567890",
         content=fh.read(),
         filename="report.csv",
         title="Daily Sales Report"
@@ -428,7 +433,7 @@ shipped with this package.
 ```python
 from nui_shared_utils import with_retry, SlackClient
 
-@with_retry(max_attempts=3, backoff_factor=2)
+@with_retry(max_attempts=3, exponential_base=2)
 def send_critical_alert(message: str):
     """Send message with automatic retry on failure."""
     slack = SlackClient()
