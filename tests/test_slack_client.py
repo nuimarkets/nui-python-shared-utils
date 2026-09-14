@@ -211,6 +211,7 @@ class TestPostMessage:
 
     @staticmethod
     def _client(mock_webclient, mock_get_secret, response=None):
+        """A client over a mocked WebClient, answering OK unless told otherwise."""
         mock_get_secret.return_value = {"bot_token": "xoxb-test-token"}
         mock_client = Mock()
         mock_webclient.return_value = mock_client
@@ -363,6 +364,7 @@ class TestPostMessage:
     @patch("nui_shared_utils.base_client.get_secret")
     @patch("nui_shared_utils.slack_client.WebClient")
     def test_forwards_unfurl_flags(self, mock_webclient, mock_get_secret):
+        """Set flags reach the SDK; the pair with the omit test below is the point."""
         slack, mock_client = self._client(mock_webclient, mock_get_secret)
 
         slack.post_message("C123", "Test message", include_lambda_header=False, unfurl_links=False, unfurl_media=False)
@@ -374,6 +376,7 @@ class TestPostMessage:
     @patch("nui_shared_utils.base_client.get_secret")
     @patch("nui_shared_utils.slack_client.WebClient")
     def test_omits_unfurl_when_unset(self, mock_webclient, mock_get_secret):
+        """Unset flags are absent, so existing callers' call assertions still hold."""
         slack, mock_client = self._client(mock_webclient, mock_get_secret)
 
         slack.post_message("C123", "Test message", include_lambda_header=False)
@@ -470,16 +473,19 @@ class TestSentMessage:
     """Tests for the SentMessage result type."""
 
     def test_truthiness_follows_ok(self):
+        """send_message converts this into its bool, so the mapping has to hold."""
         assert bool(SentMessage(ok=True, ts="1.1")) is True
         assert bool(SentMessage(ok=False)) is False
 
     def test_defaults(self):
+        """Only `ok` is required; a caller may build one without a response."""
         sent = SentMessage(ok=True)
         assert sent.ts is None
         assert sent.channel is None
         assert sent.response is None
 
     def test_is_frozen(self):
+        """A record of what Slack answered should not be editable after the fact."""
         sent = SentMessage(ok=True, ts="1.1")
         with pytest.raises(Exception):
             sent.ts = "2.2"
@@ -496,6 +502,7 @@ class TestPostThreadReply:
 
     @staticmethod
     def _client(mock_webclient, mock_get_secret, response=None):
+        """A client over a mocked WebClient, answering OK unless told otherwise."""
         mock_get_secret.return_value = {"bot_token": "xoxb-test-token"}
         mock_client = Mock()
         mock_webclient.return_value = mock_client
@@ -536,6 +543,7 @@ class TestPostThreadReply:
     @patch("nui_shared_utils.slack_client.WebClient")
     @patch.dict(os.environ, {"AWS_LAMBDA_FUNCTION_NAME": "test-function", "STAGE": "prod"})
     def test_payload_matches_send_thread_reply(self, mock_webclient, mock_get_secret, mock_boto3):
+        """The pair differs in what it returns and in nothing else."""
         mock_sts = Mock()
         mock_boto3.return_value = mock_sts
         mock_sts.get_caller_identity.return_value = {"Account": "123456789012"}
@@ -571,6 +579,7 @@ class TestPostUpdate:
 
     @staticmethod
     def _client(mock_webclient, mock_get_secret, response=None):
+        """A client over a mocked WebClient, answering OK unless told otherwise."""
         mock_get_secret.return_value = {"bot_token": "xoxb-test-token"}
         mock_client = Mock()
         mock_webclient.return_value = mock_client
@@ -580,6 +589,7 @@ class TestPostUpdate:
     @patch("nui_shared_utils.base_client.get_secret")
     @patch("nui_shared_utils.slack_client.WebClient")
     def test_returns_the_edited_message(self, mock_webclient, mock_get_secret):
+        """An edit answers with the message, so the caller can chain another."""
         slack, _ = self._client(mock_webclient, mock_get_secret)
 
         sent = slack.post_update("C999", "111.1", "Edited")
@@ -600,6 +610,7 @@ class TestPostUpdate:
     @patch("nui_shared_utils.base_client.get_secret")
     @patch("nui_shared_utils.slack_client.WebClient")
     def test_update_message_still_swallows(self, mock_webclient, mock_get_secret):
+        """The bool counterpart keeps its contract through the shared refactor."""
         slack, mock_client = self._client(mock_webclient, mock_get_secret)
         mock_client.chat_update.side_effect = SlackApiError(message="no", response={"error": "message_not_found"})
 
@@ -608,6 +619,7 @@ class TestPostUpdate:
     @patch("nui_shared_utils.base_client.get_secret")
     @patch("nui_shared_utils.slack_client.WebClient")
     def test_payload_matches_update_message(self, mock_webclient, mock_get_secret):
+        """The pair differs in what it returns and in nothing else."""
         slack, mock_client = self._client(mock_webclient, mock_get_secret)
         args = dict(channel="C999", ts="111.1", text="Edited", blocks=[{"type": "section"}])
 
@@ -632,6 +644,7 @@ class TestPostFile:
 
     @staticmethod
     def _client(mock_webclient, mock_get_secret, response=None):
+        """A client over a mocked WebClient, answering OK unless told otherwise."""
         mock_get_secret.return_value = {"bot_token": "xoxb-test-token"}
         mock_client = Mock()
         mock_webclient.return_value = mock_client
@@ -650,6 +663,7 @@ class TestPostFile:
     @patch("nui_shared_utils.base_client.get_secret")
     @patch("nui_shared_utils.slack_client.WebClient")
     def test_uploads_into_a_thread(self, mock_webclient, mock_get_secret):
+        """thread_ts and bytes content are what the threaded-upload caller needs."""
         slack, mock_client = self._client(mock_webclient, mock_get_secret)
 
         slack.post_file("C123", b"%PDF-", "tender.pdf", thread_ts="111.1")
@@ -680,6 +694,7 @@ class TestPostFile:
     @patch("nui_shared_utils.base_client.get_secret")
     @patch("nui_shared_utils.slack_client.WebClient")
     def test_send_file_still_swallows(self, mock_webclient, mock_get_secret):
+        """The bool counterpart keeps its contract through the shared refactor."""
         slack, mock_client = self._client(mock_webclient, mock_get_secret)
         mock_client.files_upload_v2.side_effect = SlackApiError(message="no", response={"error": "invalid_auth"})
 
@@ -695,6 +710,7 @@ class TestPostFamilyConvention:
     @patch("nui_shared_utils.base_client.get_secret")
     @patch("nui_shared_utils.slack_client.WebClient")
     def test_every_post_method_raises_and_every_send_method_swallows(self, mock_webclient, mock_get_secret):
+        """The two families are only teachable if the rule holds for every member."""
         mock_get_secret.return_value = {"bot_token": "xoxb-test-token"}
         mock_client = Mock()
         mock_webclient.return_value = mock_client
@@ -1738,6 +1754,7 @@ class TestSlackGuideMatchesTheClient:
     GUIDE = Path(nui_shared_utils.__file__).parent.parent / "docs" / "guides" / "slack-integration.md"
 
     def _guide(self):
+        """The guide text, skipped rather than failed where docs are not installed."""
         if not self.GUIDE.exists():
             pytest.skip("docs/ not present in this install")
         return self.GUIDE.read_text()
@@ -1745,12 +1762,14 @@ class TestSlackGuideMatchesTheClient:
     CALL = r"(?:\bslack(?:_client)?|SlackClient\(\))\.(\w+)\(([^()]*(?:\([^()]*\)[^()]*)*)\)"
 
     def _documented_calls(self):
+        """Every SlackClient call the guide makes, as (method, args, line)."""
         import re
 
         for match in re.finditer(self.CALL, self._guide(), re.S):
             yield match.group(1), match.group(2), self._guide()[: match.start()].count("\n") + 1
 
     def test_every_documented_method_exists(self):
+        """A documented method that does not exist is an AttributeError on copy."""
         real = {m for m in dir(SlackClient) if not m.startswith("_")}
         missing = sorted({name for name, _, _ in self._documented_calls()} - real)
 
