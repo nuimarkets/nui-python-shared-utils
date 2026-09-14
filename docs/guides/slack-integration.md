@@ -94,6 +94,27 @@ slack.send_message(
 )
 ```
 
+### Two families of write method
+
+Every write has two forms, differing only in what they hand back:
+
+| Operation | Returns a bool, swallows errors | Returns Slack's answer, raises |
+|---|---|---|
+| Post a message | `send_message` | `post_message` |
+| Reply in a thread | `send_thread_reply` | `post_thread_reply` |
+| Edit a message | `update_message` | `post_update` |
+| Upload a file | `send_file` | `post_file` |
+| Add a reaction | `add_reaction` | (none) |
+
+Reach for a `post_*` method when you need the message's `ts`, which is the only
+handle a thread reply, edit or reaction accepts, or when you need the reason
+behind a failure. Keep the bool-returning ones when a failed notification should
+not take the caller down with it.
+
+The `post_*` methods return a `SentMessage` (`ok`, `ts`, `channel`, and the raw
+`response`), except `post_file`, which returns the upload's completion response
+because an upload has no single message `ts`.
+
 ### Message Threading
 
 Threading needs the parent message's `ts`, so post it with `post_message`
@@ -118,8 +139,8 @@ slack.send_thread_reply(
 `post_message` returns a `SentMessage` with `ok`, `ts`, `channel` and the raw
 `response`.
 
-Unlike every other method on this client it raises rather than swallowing, and it
-raises on *every* failure including Slack's own rejections: `slack_sdk` validates
+Like every `post_*` method here, it raises rather than swallowing, and it raises
+on *every* failure including Slack's own rejections: `slack_sdk` validates
 each response, so `{"ok": false, ...}` arrives as a `SlackApiError` carrying the
 error code, status and retry headers on `err.response`. A returned `SentMessage`
 therefore always succeeded. Handle failure with `except`, not with `if sent:`,
