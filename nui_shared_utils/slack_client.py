@@ -936,10 +936,10 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         Edit an existing message in place and return Slack's response. Raises.
 
         This edits; it does not post anything new, despite the ``post_`` prefix
-        the response-returning family shares. Counterpart of update_message, following the same rule
-        as post_message: it returns on success and raises on every failure. Use
-        it when an edit failing silently would be wrong, or when you need the
-        edited message's fields back.
+        the response-returning family shares. It is the counterpart of
+        update_message and follows the same rule as post_message: it returns on
+        success and raises on every failure. Use it when an edit failing silently
+        would be wrong, or when you need the edited message's fields back.
 
         Args:
             channel: Channel ID. Pass the ``channel`` from the original post's

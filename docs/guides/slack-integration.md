@@ -280,7 +280,7 @@ def send_execution_report(event, context, results):
 
     slack.send_message(
         channel="#lambda-executions",
-        text=f"{function_name} execution report",
+        text=f"{context.function_name} execution report",
         blocks=blocks
     )
 ```
