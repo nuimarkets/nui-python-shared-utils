@@ -187,9 +187,12 @@ The decorator logs the exception and sends the Slack alert (if configured), then
   re-raises. A returned error dict tells the event source mapping the batch succeeded (with
   `ReportBatchItemFailures`, a response without `batchItemFailures` means every record did),
   so the batch would be deleted. Re-raising leaves it on the queue for redelivery; it moves
-  to a DLQ after `maxReceiveCount` only if the queue has a redrive policy. For per-record
-  retries, enable `ReportBatchItemFailures` on the mapping and return
-  `{"batchItemFailures": [...]}` from the handler; the decorator passes it through.
+  to a DLQ after `maxReceiveCount` only if the queue has a redrive policy. The whole batch
+  comes back, records the handler already processed included, so a handler with
+  `batchSize` above 1 must be idempotent or catch per record. On a FIFO queue the message
+  group waits until the batch succeeds or redrives, and the Slack alert fires on every
+  receive. For per-record retries, enable `ReportBatchItemFailures` on the mapping and
+  return `{"batchItemFailures": [...]}` from the handler; the decorator passes it through.
 - **Every other event**: returns `{"statusCode": 500, "body": "Internal Server Error"}`.
 
 ### Basic Usage (Logging Only)
