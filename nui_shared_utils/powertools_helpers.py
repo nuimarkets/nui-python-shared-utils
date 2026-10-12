@@ -145,6 +145,17 @@ def get_powertools_logger(
     return powertools_logger
 
 
+def _is_sqs_event(event: Any) -> bool:
+    """True when ``event`` is a batch delivered by an SQS event source mapping."""
+    if not isinstance(event, dict):
+        return False
+    records = event.get("Records")
+    if not isinstance(records, list) or not records:
+        return False
+    first = records[0]
+    return isinstance(first, dict) and first.get("eventSource") == "aws:sqs"
+
+
 def powertools_handler(
     service_name: str,
     metrics_namespace: Optional[str] = None,
@@ -201,6 +212,13 @@ def powertools_handler(
     Note:
         The decorated handler must return a dict with statusCode and optional body.
         On exception, returns: {"statusCode": 500, "body": "Internal Server Error"}
+
+        SQS events are the exception: after logging and alerting, the exception is
+        re-raised. Any value returned to an SQS event source mapping counts as
+        success (with ``ReportBatchItemFailures``, a response without
+        ``batchItemFailures`` means every record succeeded), so returning the 500
+        dict would delete the batch. Re-raising leaves it on the queue for
+        redelivery and, after ``maxReceiveCount``, the DLQ.
     """
 
     def decorator(func: Callable) -> Callable:
@@ -273,6 +291,10 @@ def powertools_handler(
                         )
                     except Exception as slack_error:
                         logger.warning("Failed to send Slack alert: %s", slack_error)
+
+                # Re-raise for SQS so the batch stays on the queue; see the Note above.
+                if _is_sqs_event(event):
+                    raise
 
                 # Return proper Lambda error response
                 return {

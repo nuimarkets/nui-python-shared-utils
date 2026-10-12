@@ -334,6 +334,109 @@ class TestPowertoolsHandler:
         assert result["body"] == "Internal Server Error"
 
 
+def _sqs_event(*message_ids):
+    return {"Records": [{"messageId": mid, "eventSource": "aws:sqs", "body": "{}"} for mid in message_ids]}
+
+
+class TestPowertoolsHandlerSqs:
+    """An SQS batch must stay on the queue when the handler raises.
+
+    Any value returned to an SQS event source mapping counts as success, so
+    returning the 500 dict deletes the batch: no redelivery, no DLQ.
+    """
+
+    def test_sqs_exception_is_reraised(self, monkeypatch):
+        monkeypatch.delenv("AWS_LAMBDA_RUNTIME_API", raising=False)
+
+        from nui_shared_utils.powertools_helpers import powertools_handler
+
+        error = ConnectionError("Error reading SSH protocol banner")
+
+        @powertools_handler(service_name="test-service")
+        def handler(event, context):
+            raise error
+
+        with pytest.raises(ConnectionError) as excinfo:
+            handler(_sqs_event("m-1", "m-2"), MagicMock())
+
+        assert excinfo.value is error
+
+    def test_sqs_exception_alerts_slack_before_reraising(self, monkeypatch):
+        monkeypatch.delenv("AWS_LAMBDA_RUNTIME_API", raising=False)
+
+        mock_slack_client = MagicMock()
+
+        with patch("nui_shared_utils.powertools_helpers.SLACK_CLIENT_AVAILABLE", True):
+            with patch("nui_shared_utils.powertools_helpers.SlackClient", return_value=mock_slack_client):
+                from nui_shared_utils.powertools_helpers import powertools_handler
+
+                @powertools_handler(service_name="test-service", slack_alert_channel="#errors")
+                def handler(event, context):
+                    raise ValueError("Test error")
+
+                with pytest.raises(ValueError):
+                    handler(_sqs_event("m-1"), MagicMock())
+
+                mock_slack_client.send_message.assert_called_once()
+
+    def test_sqs_reraises_original_exception_when_slack_fails(self, monkeypatch):
+        """A failed alert must not replace the handler's exception or swallow it."""
+        monkeypatch.delenv("AWS_LAMBDA_RUNTIME_API", raising=False)
+
+        mock_slack_client = MagicMock()
+        mock_slack_client.send_message.side_effect = RuntimeError("Slack API error")
+
+        with patch("nui_shared_utils.powertools_helpers.SLACK_CLIENT_AVAILABLE", True):
+            with patch("nui_shared_utils.powertools_helpers.SlackClient", return_value=mock_slack_client):
+                from nui_shared_utils.powertools_helpers import powertools_handler
+
+                @powertools_handler(service_name="test-service", slack_alert_channel="#errors")
+                def handler(event, context):
+                    raise ValueError("Test error")
+
+                with pytest.raises(ValueError, match="Test error"):
+                    handler(_sqs_event("m-1"), MagicMock())
+
+    def test_sqs_success_returns_handler_result(self, monkeypatch):
+        monkeypatch.delenv("AWS_LAMBDA_RUNTIME_API", raising=False)
+
+        from nui_shared_utils.powertools_helpers import powertools_handler
+
+        @powertools_handler(service_name="test-service")
+        def handler(event, context):
+            return {"batchItemFailures": [{"itemIdentifier": "m-2"}]}
+
+        result = handler(_sqs_event("m-1", "m-2"), MagicMock())
+
+        assert result == {"batchItemFailures": [{"itemIdentifier": "m-2"}]}
+
+    @pytest.mark.parametrize(
+        "event",
+        [
+            {"Records": [{"EventSource": "aws:sns", "Sns": {}}]},
+            {"Records": [{"eventSource": "aws:kinesis", "kinesis": {}}]},
+            {"Records": [{"eventSource": "aws:s3", "s3": {}}]},
+            {"Records": []},
+            {"Records": "not-a-list"},
+            {"source": "aws.events", "detail-type": "Scheduled Event"},
+            ["not", "a", "dict"],
+        ],
+        ids=["sns", "kinesis", "s3", "empty-records", "records-not-list", "scheduled", "non-dict"],
+    )
+    def test_non_sqs_events_keep_returning_500(self, monkeypatch, event):
+        monkeypatch.delenv("AWS_LAMBDA_RUNTIME_API", raising=False)
+
+        from nui_shared_utils.powertools_helpers import powertools_handler
+
+        @powertools_handler(service_name="test-service")
+        def handler(event, context):
+            raise ValueError("Test error")
+
+        result = handler(event, MagicMock())
+
+        assert result == {"statusCode": 500, "body": "Internal Server Error"}
+
+
 class TestOptionalImports:
     """Tests for graceful degradation of optional dependencies"""
 
