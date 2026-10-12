@@ -183,12 +183,13 @@ def powertools_handler(
 
 The decorator logs the exception and sends the Slack alert (if configured), then:
 
-- **SQS events** (`Records[0].eventSource == "aws:sqs"`): re-raises. Any value returned to
-  an SQS event source mapping counts as success, and with `ReportBatchItemFailures` a
-  response without `batchItemFailures` means every record succeeded, so returning an error
-  dict would delete the batch. Re-raising leaves it on the queue for redelivery and, after
-  `maxReceiveCount`, the DLQ. A handler that wants per-record retries still returns
-  `{"batchItemFailures": [...]}` itself.
+- **SQS events** (`Records[0].eventSource == "aws:sqs"`, checked before the handler runs):
+  re-raises. A returned error dict tells the event source mapping the batch succeeded (with
+  `ReportBatchItemFailures`, a response without `batchItemFailures` means every record did),
+  so the batch would be deleted. Re-raising leaves it on the queue for redelivery; it moves
+  to a DLQ after `maxReceiveCount` only if the queue has a redrive policy. For per-record
+  retries, enable `ReportBatchItemFailures` on the mapping and return
+  `{"batchItemFailures": [...]}` from the handler; the decorator passes it through.
 - **Every other event**: returns `{"statusCode": 500, "body": "Internal Server Error"}`.
 
 ### Basic Usage (Logging Only)

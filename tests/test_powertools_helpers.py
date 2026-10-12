@@ -397,6 +397,49 @@ class TestPowertoolsHandlerSqs:
                 with pytest.raises(ValueError, match="Test error"):
                     handler(_sqs_event("m-1"), MagicMock())
 
+    def test_sqs_detected_before_the_handler_consumes_records(self, monkeypatch):
+        monkeypatch.delenv("AWS_LAMBDA_RUNTIME_API", raising=False)
+
+        from nui_shared_utils.powertools_helpers import powertools_handler
+
+        @powertools_handler(service_name="test-service")
+        def handler(event, context):
+            event.pop("Records")
+            raise ValueError("Test error")
+
+        with pytest.raises(ValueError):
+            handler(_sqs_event("m-1"), MagicMock())
+
+    def test_sqs_reraises_after_metrics_flush(self, monkeypatch):
+        monkeypatch.delenv("AWS_LAMBDA_RUNTIME_API", raising=False)
+
+        flushed = []
+
+        def log_metrics(func):
+            def inner(event, context):
+                try:
+                    return func(event, context)
+                finally:
+                    flushed.append(True)
+
+            return inner
+
+        mock_metrics = MagicMock()
+        mock_metrics.log_metrics = log_metrics
+
+        with patch("nui_shared_utils.powertools_helpers.POWERTOOLS_AVAILABLE", True):
+            with patch("nui_shared_utils.powertools_helpers.Metrics", return_value=mock_metrics):
+                from nui_shared_utils.powertools_helpers import powertools_handler
+
+                @powertools_handler(service_name="test-service", metrics_namespace="Test/Metrics")
+                def handler(event, context):
+                    raise ValueError("Test error")
+
+                with pytest.raises(ValueError):
+                    handler(_sqs_event("m-1"), MagicMock())
+
+        assert flushed == [True]
+
     def test_sqs_success_returns_handler_result(self, monkeypatch):
         monkeypatch.delenv("AWS_LAMBDA_RUNTIME_API", raising=False)
 
@@ -415,13 +458,14 @@ class TestPowertoolsHandlerSqs:
         [
             {"Records": [{"EventSource": "aws:sns", "Sns": {}}]},
             {"Records": [{"eventSource": "aws:kinesis", "kinesis": {}}]},
+            {"Records": [{"eventSource": "aws:dynamodb", "dynamodb": {}}]},
             {"Records": [{"eventSource": "aws:s3", "s3": {}}]},
             {"Records": []},
             {"Records": "not-a-list"},
             {"source": "aws.events", "detail-type": "Scheduled Event"},
             ["not", "a", "dict"],
         ],
-        ids=["sns", "kinesis", "s3", "empty-records", "records-not-list", "scheduled", "non-dict"],
+        ids=["sns", "kinesis", "dynamodb", "s3", "empty-records", "records-not-list", "scheduled", "non-dict"],
     )
     def test_non_sqs_events_keep_returning_500(self, monkeypatch, event):
         monkeypatch.delenv("AWS_LAMBDA_RUNTIME_API", raising=False)
