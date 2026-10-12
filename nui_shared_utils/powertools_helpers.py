@@ -145,6 +145,17 @@ def get_powertools_logger(
     return powertools_logger
 
 
+def _is_sqs_event(event: Any) -> bool:
+    """True when ``event`` is a batch delivered by an SQS event source mapping."""
+    if not isinstance(event, dict):
+        return False
+    records = event.get("Records")
+    if not isinstance(records, list) or not records:
+        return False
+    first = records[0]
+    return isinstance(first, dict) and first.get("eventSource") == "aws:sqs"
+
+
 def powertools_handler(
     service_name: str,
     metrics_namespace: Optional[str] = None,
@@ -199,8 +210,17 @@ def powertools_handler(
         ...     return {"statusCode": 200}
 
     Note:
-        The decorated handler must return a dict with statusCode and optional body.
-        On exception, returns: {"statusCode": 500, "body": "Internal Server Error"}
+        The handler's return value passes through unchanged: a ``statusCode`` dict
+        for API Gateway, ``{"batchItemFailures": [...]}`` for an SQS mapping with
+        ``ReportBatchItemFailures``.
+
+        On exception, returns ``{"statusCode": 500, "body": "Internal Server Error"}``,
+        except for SQS events, where the exception is re-raised after logging and
+        alerting. A returned value tells the SQS mapping the batch succeeded (with
+        ``ReportBatchItemFailures``, a response without ``batchItemFailures`` means
+        every record did), so the 500 dict would delete the batch. Re-raising leaves
+        it on the queue for redelivery, and in the DLQ after ``maxReceiveCount``
+        when the queue has a redrive policy.
     """
 
     def decorator(func: Callable) -> Callable:
@@ -230,6 +250,9 @@ def powertools_handler(
             # Populate SlackClient account info from Lambda context ARN
             if slack_client:
                 slack_client.set_handler_context(context)
+
+            # Classify before the handler runs: it may consume or mutate event["Records"].
+            is_sqs = _is_sqs_event(event)
 
             try:
                 # Apply logger context injection
@@ -273,6 +296,10 @@ def powertools_handler(
                         )
                     except Exception as slack_error:
                         logger.warning("Failed to send Slack alert: %s", slack_error)
+
+                # Re-raise for SQS so the batch stays on the queue; see the Note above.
+                if is_sqs:
+                    raise
 
                 # Return proper Lambda error response
                 return {
