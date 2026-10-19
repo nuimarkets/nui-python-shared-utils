@@ -44,9 +44,10 @@ that contained them.
 
 - **BREAKING**: replace `pytz` with the standard-library `zoneinfo` API and remove `pytz`
   from the base dependencies. Code importing timezone constants must replace `.localize()`
-  with `tzinfo=...`, passing `fold=1` where the old `is_dst=False` default mattered, and
-  replace `.zone` with `.key`. Declare `pytz` directly if application code still imports it.
-  The `[timezone]` extra supplies `tzdata` for minimal images without a system IANA database.
+  with `tzinfo=...`, passing `fold=1` for repeated wall times where the old `is_dst=False`
+  default mattered, and replace `.zone` with `.key`. Declare `pytz` directly if application
+  code still imports it. The `[timezone]` extra supplies `tzdata` for minimal images without
+  a system IANA database.
 - Allow Elasticsearch client majors 7.17, 8.x, and 9.x through the `[elasticsearch]` and
   `all` extras. See
   [ADR-007](docs/decisions/ADR-007-elasticsearch-client-version-range.md).
@@ -68,7 +69,7 @@ that contained them.
 
 ### Removed
 
-- **BREAKING**: the `nui_lambda_shared_utils` import shim. Import from `nui_shared_utils` instead (`from nui_shared_utils import ...`). The shim forwarded to `nui_shared_utils` with a `DeprecationWarning` since the 1.3.0 import-root rename and was always slated for removal in 2.0.0.
+- **BREAKING**: the `nui_lambda_shared_utils` import shim. Import from `nui_shared_utils` instead (`from nui_shared_utils import ...`). The shim forwarded to `nui_shared_utils` with a `DeprecationWarning` since the 1.3.1 import-root rename and was always slated for removal in 2.0.0.
   - The old distribution name still installs: `pip install nui-lambda-shared-utils` continues to resolve via the redirect package (which depends on `nui-python-shared-utils`). Only the old import root is gone.
 
 ### Added
@@ -111,8 +112,9 @@ that contained them.
 
 ### Changed
 
-- **BREAKING**: resolve the Secrets Manager region from the boto3 session or `AWS_REGION`,
-  and fail explicitly instead of silently defaulting to `ap-southeast-2`.
+- **BREAKING**: resolve the Secrets Manager region from the boto3 session, `AWS_REGION`, or
+  `AWS_DEFAULT_REGION`, and fail explicitly instead of silently defaulting to
+  `ap-southeast-2`.
 
 ## [1.3.3] - 2026-05-06
 
