@@ -464,6 +464,33 @@ class TestPowertoolsHandlerSqs:
 
         assert result == {"batchItemFailures": [{"itemIdentifier": "m-2"}]}
 
+    @pytest.mark.parametrize(
+        "event",
+        [
+            {"Records": [{"EventSource": "aws:sns", "Sns": {}}]},
+            {"Records": [{"eventSource": "aws:kinesis", "kinesis": {}}]},
+            {"Records": [{"eventSource": "aws:dynamodb", "dynamodb": {}}]},
+            {"Records": [{"eventSource": "aws:s3", "s3": {}}]},
+            {"Records": []},
+            {"Records": "not-a-list"},
+            {"source": "aws.events", "detail-type": "Scheduled Event"},
+            ["not", "a", "dict"],
+        ],
+        ids=["sns", "kinesis", "dynamodb", "s3", "empty-records", "records-not-list", "scheduled", "non-dict"],
+    )
+    def test_non_sqs_events_keep_returning_500(self, monkeypatch, event):
+        monkeypatch.delenv("AWS_LAMBDA_RUNTIME_API", raising=False)
+
+        from nui_shared_utils.powertools_helpers import powertools_handler
+
+        @powertools_handler(service_name="test-service")
+        def handler(event, context):
+            raise ValueError("Test error")
+
+        result = handler(event, MagicMock())
+
+        assert result == {"statusCode": 500, "body": "Internal Server Error"}
+
 
 class TestPowertoolsHandlerReraise:
     def test_kinesis_exception_is_reraised_when_enabled(self, monkeypatch):
@@ -526,33 +553,6 @@ class TestPowertoolsHandlerReraise:
                         )
 
         assert calls == ["log", "slack"]
-
-    @pytest.mark.parametrize(
-        "event",
-        [
-            {"Records": [{"EventSource": "aws:sns", "Sns": {}}]},
-            {"Records": [{"eventSource": "aws:kinesis", "kinesis": {}}]},
-            {"Records": [{"eventSource": "aws:dynamodb", "dynamodb": {}}]},
-            {"Records": [{"eventSource": "aws:s3", "s3": {}}]},
-            {"Records": []},
-            {"Records": "not-a-list"},
-            {"source": "aws.events", "detail-type": "Scheduled Event"},
-            ["not", "a", "dict"],
-        ],
-        ids=["sns", "kinesis", "dynamodb", "s3", "empty-records", "records-not-list", "scheduled", "non-dict"],
-    )
-    def test_non_sqs_events_keep_returning_500(self, monkeypatch, event):
-        monkeypatch.delenv("AWS_LAMBDA_RUNTIME_API", raising=False)
-
-        from nui_shared_utils.powertools_helpers import powertools_handler
-
-        @powertools_handler(service_name="test-service")
-        def handler(event, context):
-            raise ValueError("Test error")
-
-        result = handler(event, MagicMock())
-
-        assert result == {"statusCode": 500, "body": "Internal Server Error"}
 
 
 class TestOptionalImports:

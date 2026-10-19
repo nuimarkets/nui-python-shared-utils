@@ -211,6 +211,11 @@ The option is handler-wide rather than an event-source list because the handler'
 configuration determines whether Lambda failure semantics are appropriate. SQS does not
 require the option and continues to re-raise unconditionally.
 
+For synchronous triggers such as API Gateway, enabling this option changes failures from
+the decorator's 500 response into an unhandled Lambda invocation error. Enable it only when
+that caller-visible behavior is intended. Every retry invokes the decorator again, so a
+configured Slack alert can be sent once per attempt.
+
 ### Re-raise Failures for Stream and Async Sources
 
 ```python
