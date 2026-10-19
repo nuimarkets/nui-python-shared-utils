@@ -162,6 +162,7 @@ def powertools_handler(
     slack_alert_channel: Optional[str] = None,
     slack_account_names: Optional[Dict[str, str]] = None,
     slack_account_names_config: Optional[str] = None,
+    reraise_exceptions: bool = False,
 ):
     """
     Decorator for Lambda handlers with logging, metrics, and error handling.
@@ -175,6 +176,7 @@ def powertools_handler(
     - Optional metrics.log_metrics integration (if metrics_namespace provided)
     - Structured exception logging with traceback
     - Optional Slack alerts on failures (if slack_alert_channel provided)
+    - Optional exception re-raising for event sources that use Lambda failure semantics
     - Graceful degradation if Slack client unavailable
     - Proper Lambda error response formatting
 
@@ -190,6 +192,11 @@ def powertools_handler(
             Values loaded from this file are used as defaults, but any keys
             provided in ``slack_account_names`` take precedence and override
             the YAML-loaded values.
+        reraise_exceptions: Re-raise handler exceptions after logging and Slack
+            alerting. Enable this for event sources such as Kinesis, DynamoDB
+            Streams, SNS, S3, and EventBridge that rely on a raised exception to
+            record a failed invocation and apply their retry or failure handling.
+            Defaults to False to preserve the existing 500 response behavior.
 
     Returns:
         Decorator function for Lambda handlers
@@ -214,13 +221,14 @@ def powertools_handler(
         for API Gateway, ``{"batchItemFailures": [...]}`` for an SQS mapping with
         ``ReportBatchItemFailures``.
 
-        On exception, returns ``{"statusCode": 500, "body": "Internal Server Error"}``,
-        except for SQS events, where the exception is re-raised after logging and
-        alerting. A returned value tells the SQS mapping the batch succeeded (with
-        ``ReportBatchItemFailures``, a response without ``batchItemFailures`` means
-        every record did), so the 500 dict would delete the batch. Re-raising leaves
-        it on the queue for redelivery, and in the DLQ after ``maxReceiveCount``
-        when the queue has a redrive policy.
+        On exception, returns ``{"statusCode": 500, "body": "Internal Server Error"}``
+        by default. Set ``reraise_exceptions=True`` to re-raise after logging and
+        alerting when the event source relies on Lambda failure semantics. SQS events
+        are always re-raised, regardless of this option: a returned value tells the
+        SQS mapping the batch succeeded (with ``ReportBatchItemFailures``, a response
+        without ``batchItemFailures`` means every record did), so the 500 dict would
+        delete the batch. Re-raising leaves it on the queue for redelivery, and in the
+        DLQ after ``maxReceiveCount`` when the queue has a redrive policy.
     """
 
     def decorator(func: Callable) -> Callable:
@@ -297,8 +305,9 @@ def powertools_handler(
                     except Exception as slack_error:
                         logger.warning("Failed to send Slack alert: %s", slack_error)
 
-                # Re-raise for SQS so the batch stays on the queue; see the Note above.
-                if is_sqs:
+                # Re-raise for SQS so the batch stays on the queue, or when the caller
+                # opts into Lambda failure semantics; see the Note above.
+                if is_sqs or reraise_exceptions:
                     raise
 
                 # Return proper Lambda error response
