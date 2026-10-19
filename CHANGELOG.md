@@ -3,11 +3,12 @@
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+and breaking changes are called out explicitly below, including historical minor releases
+that contained them.
 
 ## [Unreleased]
 
-### Changed
+### Added
 
 - Add an opt-in `reraise_exceptions` parameter to `powertools_handler`. When enabled,
   handler failures are logged and alerted before the original exception is re-raised so
@@ -41,8 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **BREAKING**: replace `pytz` with the standard-library `zoneinfo` API. Code importing
-  timezone constants must replace `.localize()` with `tzinfo=...` and `.zone` with `.key`.
+- **BREAKING**: replace `pytz` with the standard-library `zoneinfo` API and remove `pytz`
+  from the base dependencies. Code importing timezone constants must replace `.localize()`
+  with `tzinfo=...`, passing `fold=1` where the old `is_dst=False` default mattered, and
+  replace `.zone` with `.key`. Declare `pytz` directly if application code still imports it.
   The `[timezone]` extra supplies `tzdata` for minimal images without a system IANA database.
 - Allow Elasticsearch client majors 7.17, 8.x, and 9.x through the `[elasticsearch]` and
   `all` extras. See
@@ -108,8 +111,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Resolve the Secrets Manager region from the boto3 session or `AWS_REGION`, and fail
-  explicitly instead of silently defaulting to a region.
+- **BREAKING**: resolve the Secrets Manager region from the boto3 session or `AWS_REGION`,
+  and fail explicitly instead of silently defaulting to `ap-southeast-2`.
 
 ## [1.3.3] - 2026-05-06
 
@@ -118,7 +121,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cold-start init for Lambda consumers reduced by ~400ms.
   - `boto3` and `botocore` are no longer imported at module load. They are deferred to first use inside `secrets_helper.get_secret`, `utils.create_aws_client`/`resolve_aws_region`, and `cloudwatch_metrics.MetricsPublisher` (now lazy-constructs its boto3 client on first metric publish).
   - The package `__init__` uses PEP 562 `__getattr__` so submodules (`slack_client`, `es_client`, `db_client`, `jwt_auth`, `powertools_helpers`, etc.) only load when their attributes are first accessed. `import nui_shared_utils` is ~10ms, down from ~700ms+.
-- Public API is unchanged. Optional integrations still resolve to `None` when their backing dependency is not installed (matching pre-1.4 behaviour).
+- Public API is unchanged. Optional integrations still resolve to `None` when their backing dependency is not installed (matching the previous behaviour).
 
 ### Added
 

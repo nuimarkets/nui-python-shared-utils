@@ -230,8 +230,9 @@ def handler(event, context):
 Logging and Slack alerting run before the original exception is re-raised. Configure the
 trigger's retry, bisect, failure destination, or dead-letter behavior separately in AWS.
 Every retry invokes the decorator again, so a configured Slack alert can be sent once per
-attempt. For Kinesis and DynamoDB Streams, use settings such as maximum retry attempts,
-maximum record age, and bisect-on-error to bound retries when appropriate.
+attempt. For Kinesis and DynamoDB Streams, maximum retry attempts and maximum record age
+bound retries. Bisect-on-error isolates a failing record by adding invocations, which do not
+consume the retry quota and can produce additional alerts.
 
 ### Basic Usage (Logging Only)
 
