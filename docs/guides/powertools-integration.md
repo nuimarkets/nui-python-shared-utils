@@ -218,13 +218,19 @@ that caller-visible behavior is intended.
 ### Re-raise Failures for Stream and Async Sources
 
 ```python
+from nui_shared_utils import powertools_handler
+
+
 @powertools_handler(
     service_name="event-processor",
     slack_alert_channel="#production-alerts",
     reraise_exceptions=True,
 )
 def handler(event, context):
-    process_event(event)
+    records = event.get("Records", [])
+    for record in records:
+        print(record)
+    return {"processed": len(records)}
 ```
 
 Logging and Slack alerting run before the original exception is re-raised. Configure the
