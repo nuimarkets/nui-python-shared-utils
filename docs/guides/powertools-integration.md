@@ -213,8 +213,7 @@ require the option and continues to re-raise unconditionally.
 
 For synchronous triggers such as API Gateway, enabling this option changes failures from
 the decorator's 500 response into an unhandled Lambda invocation error. Enable it only when
-that caller-visible behavior is intended. Every retry invokes the decorator again, so a
-configured Slack alert can be sent once per attempt.
+that caller-visible behavior is intended.
 
 ### Re-raise Failures for Stream and Async Sources
 
@@ -230,6 +229,9 @@ def handler(event, context):
 
 Logging and Slack alerting run before the original exception is re-raised. Configure the
 trigger's retry, bisect, failure destination, or dead-letter behavior separately in AWS.
+Every retry invokes the decorator again, so a configured Slack alert can be sent once per
+attempt. For Kinesis and DynamoDB Streams, use settings such as maximum retry attempts,
+maximum record age, and bisect-on-error to bound retries when appropriate.
 
 ### Basic Usage (Logging Only)
 

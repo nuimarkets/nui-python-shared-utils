@@ -14,36 +14,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stream and asynchronous event sources can apply their configured failure handling.
   The default remains the existing 500 response, while SQS events continue to re-raise
   unconditionally.
-- The `[elasticsearch]` extra (and `all`) now allows `elasticsearch>=7.17.0,<10.0.0`, up from `<8.0.0`. Client majors 7.17, 8.x and 9.x are supported and tested, so the extra installs alongside a current client instead of failing to resolve. See [ADR-007](docs/decisions/ADR-007-elasticsearch-client-version-range.md).
+
+## [2.3] - 2026-10-12
 
 ### Fixed
 
-- `ElasticsearchClient.search()` / `.aggregate()` now send `size` inside the request body instead of as a keyword alongside `body=`. On elasticsearch-py 8.x/9.x the previous form mutated the caller's body dict in place and raised `ValueError: Received multiple values for 'size'` when a body dict was reused for a second call.
-- `ElasticsearchClient.get_indices_info()` returns a plain `list` on every client major (8.x/9.x wrap the JSON array in a response object).
+- `powertools_handler` re-raises exceptions for SQS event-source mappings after logging and
+  alerting, so failed batches are redelivered and can reach a configured DLQ instead of
+  being acknowledged by the wrapper's 500 response.
+
+## [2.2] - 2026-09-14
 
 ### Added
 
-- `tests/test_es_client_compat.py` - drives the real elasticsearch-py client through a stubbed transport, so a call shape a client major stops accepting fails in tests rather than at runtime. CI runs it against 7.17, 8.x and 9.x (`es-compat` job).
+- Add response-returning Slack write methods (`post_message`, `post_thread_reply`,
+  `post_update`, and `post_file`) for callers that need message timestamps, channel IDs,
+  or the raw upload response. The existing bool-returning `send_*` methods retain their
+  error-swallowing behavior.
+- Add `SentMessage` as the result type for posted messages and thread replies.
 
-## [2.0.0] - 2026-07-13
+### Changed
+
+- `send_file` and `post_file` accept bytes and can upload into a thread with `thread_ts`.
+
+## [2.1] - 2026-08-03
+
+### Changed
+
+- **BREAKING**: replace `pytz` with the standard-library `zoneinfo` API. Code importing
+  timezone constants must replace `.localize()` with `tzinfo=...` and `.zone` with `.key`.
+  The `[timezone]` extra supplies `tzdata` for minimal images without a system IANA database.
+- Allow Elasticsearch client majors 7.17, 8.x, and 9.x through the `[elasticsearch]` and
+  `all` extras. See
+  [ADR-007](docs/decisions/ADR-007-elasticsearch-client-version-range.md).
+
+### Fixed
+
+- Send Elasticsearch search `size` inside a copied request body, avoiding caller-dict
+  mutation and duplicate-value errors on client majors 8.x and 9.x.
+- Return a plain `list` from `ElasticsearchClient.get_indices_info()` on every supported
+  Elasticsearch client major.
+- Make no-argument `slack_formatter.format_nz_time()` independent of the host timezone.
+
+### Added
+
+- Add an Elasticsearch compatibility test matrix for client majors 7.17, 8.x, and 9.x.
+- Add ADRs covering Elasticsearch version support and the move to `zoneinfo`.
+
+## [2.0] - 2026-07-13
 
 ### Removed
 
 - **BREAKING**: the `nui_lambda_shared_utils` import shim. Import from `nui_shared_utils` instead (`from nui_shared_utils import ...`). The shim forwarded to `nui_shared_utils` with a `DeprecationWarning` since the 1.3.0 import-root rename and was always slated for removal in 2.0.0.
   - The old distribution name still installs: `pip install nui-lambda-shared-utils` continues to resolve via the redirect package (which depends on `nui-python-shared-utils`). Only the old import root is gone.
 
-## [1.5.0] - 2026-06-29
+### Added
+
+- Add ADRs for the package's generic scope, lazy integrations, credential precedence,
+  explicit Secrets Manager region resolution, and Snowflake SQL API choice.
+
+## [1.6.0] - 2026-07-13
 
 ### Added
 
-- `nui_shared_utils.llm` - a generic Anthropic (Claude) client helper behind a new optional `[llm]` extra (`anthropic[bedrock]>=0.45.0,<1.0.0`). Plumbing only; prompts, tool schemas, and model ids stay in the consumer.
-  - `build_anthropic_client(mode="api_key"|"bedrock", ...)` - API-key auth (explicit -> `ANTHROPIC_API_KEY` env -> Secrets Manager) or Bedrock IAM auth.
-  - `call_tool(client, *, tool, prompt, model, max_tokens, system=None)` - forced tool-use call returning the named tool's `input` dict, or `None` on any model/parse failure (best-effort; never raises).
-  - `call_text(client, *, prompt, model, max_tokens, system=None)` - text call returning `{text, input_tokens, output_tokens}`.
-  - Lazy-loaded like the other optional integrations: `import nui_shared_utils` does not import `anthropic` (cold-start preserved), and the top-level exports resolve to `None` when the `[llm]` extra is not installed.
-- `docs/guides/llm-integration.md` and a README usage example.
+- Add a backend-neutral structured logging field registry, request-scoped Powertools and
+  stdlib binders, binding helpers, field validation, and recursive payload redaction.
+- Add the structured logging contract guide and ADR-001.
 
-## [1.4.0] - 2026-05-06
+## [1.5.0] - 2026-07-02
+
+### Added
+
+- Add optional `unfurl_links` and `unfurl_media` controls to `SlackClient.send_message`.
+  Unset values preserve Slack's existing defaults.
+
+## [1.4.1] - 2026-06-29
+
+### Fixed
+
+- Replace the Snowflake extra's direct Git dependency with the published
+  `snowflake-sql-api>=0.1.1,<0.2.0` range so PyPI accepts the package metadata.
+
+## [1.4.0] - 2026-06-29
+
+### Added
+
+- Add the pure-Python Snowflake SQL API client behind the optional `[snowflake]` extra,
+  including sync and async factories, key-pair credential resolution, query logging, and
+  offline tests.
+- Add a generic Anthropic client helper behind the optional `[llm]` extra, with API-key and
+  Bedrock authentication, forced tool-use calls, and text calls.
+- Add Snowflake and LLM integration guides.
+
+### Changed
+
+- Resolve the Secrets Manager region from the boto3 session or `AWS_REGION`, and fail
+  explicitly instead of silently defaulting to a region.
+
+## [1.3.3] - 2026-05-06
 
 ### Performance
 
@@ -157,7 +225,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic project structure
 - Python package configuration
 
-[Unreleased]: https://github.com/nuimarkets/nui-python-shared-utils/compare/1.3.2...HEAD
+[Unreleased]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.3...HEAD
+[2.3]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.2...2.3
+[2.2]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.1...2.2
+[2.1]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.0...2.1
+[2.0]: https://github.com/nuimarkets/nui-python-shared-utils/compare/1.6.0...2.0
+[1.6.0]: https://github.com/nuimarkets/nui-python-shared-utils/compare/1.5.0...1.6.0
+[1.5.0]: https://github.com/nuimarkets/nui-python-shared-utils/compare/1.4.1...1.5.0
+[1.4.1]: https://github.com/nuimarkets/nui-python-shared-utils/compare/1.4.0...1.4.1
+[1.4.0]: https://github.com/nuimarkets/nui-python-shared-utils/compare/1.3.3...1.4.0
+[1.3.3]: https://github.com/nuimarkets/nui-python-shared-utils/compare/1.3.2...1.3.3
 [1.3.2]: https://github.com/nuimarkets/nui-python-shared-utils/compare/1.3.1...1.3.2
 [1.3.1]: https://github.com/nuimarkets/nui-python-shared-utils/compare/1.3.0...1.3.1
 [1.3.0]: https://github.com/nuimarkets/nui-python-shared-utils/compare/0.0.6...1.3.0
