@@ -75,7 +75,6 @@ tmp/
 # Project-specific
 test_env/
 TODO.md
-CHANGELOG.md
 
 # Documentation
 docs/archive/

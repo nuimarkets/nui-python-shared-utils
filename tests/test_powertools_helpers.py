@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # Test markers
 pytestmark = pytest.mark.unit
 
@@ -338,6 +337,18 @@ def _sqs_event(*message_ids):
     return {"Records": [{"messageId": mid, "eventSource": "aws:sqs", "body": "{}"} for mid in message_ids]}
 
 
+def _kinesis_event():
+    return {
+        "Records": [
+            {
+                "eventID": "shardId-000000000000:1",
+                "eventSource": "aws:kinesis",
+                "kinesis": {"sequenceNumber": "1", "data": "e30="},
+            }
+        ]
+    }
+
+
 class TestPowertoolsHandlerSqs:
     """An SQS batch must stay on the queue when the handler raises.
 
@@ -479,6 +490,69 @@ class TestPowertoolsHandlerSqs:
         result = handler(event, MagicMock())
 
         assert result == {"statusCode": 500, "body": "Internal Server Error"}
+
+
+class TestPowertoolsHandlerReraise:
+    def test_kinesis_exception_is_reraised_when_enabled(self, monkeypatch):
+        monkeypatch.delenv("AWS_LAMBDA_RUNTIME_API", raising=False)
+
+        from nui_shared_utils.powertools_helpers import powertools_handler
+
+        error = RuntimeError("Kinesis record failed")
+
+        @powertools_handler(service_name="test-service", reraise_exceptions=True)
+        def handler(event, context):
+            raise error
+
+        with pytest.raises(RuntimeError) as excinfo:
+            handler(_kinesis_event(), MagicMock())
+
+        assert excinfo.value is error
+
+    def test_kinesis_exception_keeps_500_by_default(self, monkeypatch):
+        monkeypatch.delenv("AWS_LAMBDA_RUNTIME_API", raising=False)
+
+        from nui_shared_utils.powertools_helpers import powertools_handler
+
+        @powertools_handler(service_name="test-service", reraise_exceptions=False)
+        def handler(event, context):
+            raise RuntimeError("Kinesis record failed")
+
+        result = handler(_kinesis_event(), MagicMock())
+
+        assert result == {"statusCode": 500, "body": "Internal Server Error"}
+
+    def test_eventbridge_exception_alerts_before_reraising(self, monkeypatch):
+        monkeypatch.delenv("AWS_LAMBDA_RUNTIME_API", raising=False)
+
+        from nui_shared_utils.powertools_helpers import powertools_handler
+
+        calls = []
+        mock_logger = MagicMock()
+        mock_logger.inject_lambda_context.side_effect = lambda func: func
+        mock_logger.exception.side_effect = lambda *args, **kwargs: calls.append("log")
+        mock_slack_client = MagicMock()
+        mock_slack_client.send_message.side_effect = lambda **kwargs: calls.append("slack")
+
+        with patch("nui_shared_utils.powertools_helpers.get_powertools_logger", return_value=mock_logger):
+            with patch("nui_shared_utils.powertools_helpers.SLACK_CLIENT_AVAILABLE", True):
+                with patch("nui_shared_utils.powertools_helpers.SlackClient", return_value=mock_slack_client):
+
+                    @powertools_handler(
+                        service_name="test-service",
+                        slack_alert_channel="#errors",
+                        reraise_exceptions=True,
+                    )
+                    def handler(event, context):
+                        raise ValueError("EventBridge event failed")
+
+                    with pytest.raises(ValueError, match="EventBridge event failed"):
+                        handler(
+                            {"source": "example.orders", "detail-type": "Order Created", "detail": {}},
+                            MagicMock(),
+                        )
+
+        assert calls == ["log", "slack"]
 
 
 class TestOptionalImports:

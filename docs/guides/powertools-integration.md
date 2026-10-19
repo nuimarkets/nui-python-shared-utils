@@ -168,6 +168,9 @@ def powertools_handler(
     service_name: str,
     metrics_namespace: Optional[str] = None,
     slack_alert_channel: Optional[str] = None,
+    slack_account_names: Optional[Dict[str, str]] = None,
+    slack_account_names_config: Optional[str] = None,
+    reraise_exceptions: bool = False,
 ):
     """
     Decorator for Lambda handlers with logging, metrics, and error handling.
@@ -176,6 +179,9 @@ def powertools_handler(
         service_name: Service identifier for logging and metrics dimensions
         metrics_namespace: CloudWatch namespace (e.g., "NUI/TenderAnalyser")
         slack_alert_channel: Slack channel for error alerts (e.g., "#alerts")
+        slack_account_names: AWS account ID to display-name mapping for alerts
+        slack_account_names_config: YAML file containing account-name defaults
+        reraise_exceptions: Re-raise after logging and alerting. Defaults to False.
     """
 ```
 
@@ -193,7 +199,46 @@ The decorator logs the exception and sends the Slack alert (if configured), then
   group waits until the batch succeeds or redrives, and the Slack alert fires on every
   receive. For per-record retries, enable `ReportBatchItemFailures` on the mapping and
   return `{"batchItemFailures": [...]}` from the handler; the decorator passes it through.
-- **Every other event**: returns `{"statusCode": 500, "body": "Internal Server Error"}`.
+- **Every other event, by default**: returns
+  `{"statusCode": 500, "body": "Internal Server Error"}` to preserve existing behavior.
+- **Every other event with `reraise_exceptions=True`**: re-raises after logging the
+  exception and sending the configured Slack alert. Use this for Kinesis and DynamoDB
+  Streams, where a raised exception prevents the checkpoint from advancing, and for
+  asynchronous sources such as SNS, S3, and EventBridge, where Lambda failure handling
+  depends on the invocation failing.
+
+The option is handler-wide rather than an event-source list because the handler's trigger
+configuration determines whether Lambda failure semantics are appropriate. SQS does not
+require the option and continues to re-raise unconditionally.
+
+For synchronous triggers such as API Gateway, enabling this option changes failures from
+the decorator's 500 response into an unhandled Lambda invocation error. Enable it only when
+that caller-visible behavior is intended.
+
+### Re-raise Failures for Stream and Async Sources
+
+```python
+from nui_shared_utils import powertools_handler
+
+
+@powertools_handler(
+    service_name="event-processor",
+    slack_alert_channel="#production-alerts",
+    reraise_exceptions=True,
+)
+def handler(event, context):
+    records = event.get("Records", [])
+    for record in records:
+        print(record)
+    return {"processed": len(records)}
+```
+
+Logging and Slack alerting run before the original exception is re-raised. Configure the
+trigger's retry, bisect, failure destination, or dead-letter behavior separately in AWS.
+Every retry invokes the decorator again, so a configured Slack alert can be sent once per
+attempt. For Kinesis and DynamoDB Streams, maximum retry attempts and maximum record age
+bound retries. Bisect-on-error isolates a failing record by adding invocations, which do not
+consume the retry quota and can produce additional alerts.
 
 ### Basic Usage (Logging Only)
 
