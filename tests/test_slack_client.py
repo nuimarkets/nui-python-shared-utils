@@ -51,12 +51,12 @@ class TestSlackClient:
     def test_init_with_default_secret_name(self, mock_webclient, mock_get_secret):
         """Test initialization with default secret name."""
         mock_get_secret.return_value = {"bot_token": "xoxb-default-token"}
-        
+
         with patch("nui_shared_utils.base_client.resolve_config_value") as mock_resolve:
             mock_resolve.return_value = "slack-credentials"
-            
+
             client = SlackClient()
-        
+
         mock_get_secret.assert_called_once_with("slack-credentials")
         mock_webclient.assert_called_once_with(token="xoxb-default-token")
 
@@ -77,7 +77,9 @@ class TestSendMessage:
         result = slack.send_message("C123", "Test message", include_lambda_header=False)
 
         assert result is True
-        mock_client.chat_postMessage.assert_called_once_with(channel="C123", text="Test message", blocks=None, attachments=None)
+        mock_client.chat_postMessage.assert_called_once_with(
+            channel="C123", text="Test message", blocks=None, attachments=None
+        )
 
     @patch("nui_shared_utils.base_client.get_secret")
     @patch("nui_shared_utils.slack_client.WebClient")
@@ -94,7 +96,9 @@ class TestSendMessage:
         result = slack.send_message("C123", "Fallback text", blocks=blocks, include_lambda_header=False)
 
         assert result is True
-        mock_client.chat_postMessage.assert_called_once_with(channel="C123", text="Fallback text", blocks=blocks, attachments=None)
+        mock_client.chat_postMessage.assert_called_once_with(
+            channel="C123", text="Fallback text", blocks=blocks, attachments=None
+        )
 
     @patch("nui_shared_utils.base_client.get_secret")
     @patch("nui_shared_utils.slack_client.WebClient")
@@ -996,15 +1000,18 @@ class TestLambdaContextHeader:
             header_text = header_block["elements"][0]["text"]
 
             # Use helper to check all expected parts
-            self.assert_header_format(header_text, {
-                "robot emoji": "🤖",
-                "function name": "test-function",
-                "account name": "Production",
-                "account ID": "(123456789012)",
-                "region": "eu-west-1",
-                "log emoji": "📋",
-                "log group": "`/aws/lambda/test-function`"
-            })
+            self.assert_header_format(
+                header_text,
+                {
+                    "robot emoji": "🤖",
+                    "function name": "test-function",
+                    "account name": "Production",
+                    "account ID": "(123456789012)",
+                    "region": "eu-west-1",
+                    "log emoji": "📋",
+                    "log group": "`/aws/lambda/test-function`",
+                },
+            )
 
     @patch("nui_shared_utils.slack_client.create_aws_client")
     @patch("nui_shared_utils.base_client.get_secret")
@@ -1055,14 +1062,17 @@ class TestLambdaContextHeader:
             header_text = header_block["elements"][0]["text"]
 
             # Use helper to check all expected parts
-            self.assert_header_format(header_text, {
-                "robot emoji": "🤖",
-                "function name": "nui-service",
-                "account name": "Development",
-                "account ID": "(234567890123)",
-                "region": "ap-southeast-2",
-                "log emoji": "📋"
-            })
+            self.assert_header_format(
+                header_text,
+                {
+                    "robot emoji": "🤖",
+                    "function name": "nui-service",
+                    "account name": "Development",
+                    "account ID": "(234567890123)",
+                    "region": "ap-southeast-2",
+                    "log emoji": "📋",
+                },
+            )
 
     @patch("nui_shared_utils.slack_client.create_aws_client")
     @patch("nui_shared_utils.base_client.get_secret")
@@ -1096,14 +1106,14 @@ class TestLambdaContextHeader:
 
             # Create client with custom service name
             slack = SlackClient(
-                secret_name="test-secret",
-                service_name="my-service",
-                account_names={"123456789012": "Production"}
+                secret_name="test-secret", service_name="my-service", account_names={"123456789012": "Production"}
             )
 
             # Simulate Lambda handler providing context with ARN
             mock_context = Mock()
-            mock_context.invoked_function_arn = "arn:aws:lambda:eu-west-1:123456789012:function:connect-prod-long-service-name-12345"
+            mock_context.invoked_function_arn = (
+                "arn:aws:lambda:eu-west-1:123456789012:function:connect-prod-long-service-name-12345"
+            )
             slack.set_handler_context(mock_context)
 
             result = slack.send_message("C123", "Test message")
@@ -1122,14 +1132,17 @@ class TestLambdaContextHeader:
             assert "connect-prod-long-service-name-12345" not in header_text
 
             # Other header elements should still be present
-            self.assert_header_format(header_text, {
-                "robot emoji": "🤖",
-                "function name": "my-service",  # Custom name
-                "account name": "Production",
-                "account ID": "(123456789012)",
-                "region": "eu-west-1",
-                "log emoji": "📋"
-            })
+            self.assert_header_format(
+                header_text,
+                {
+                    "robot emoji": "🤖",
+                    "function name": "my-service",  # Custom name
+                    "account name": "Production",
+                    "account ID": "(123456789012)",
+                    "region": "eu-west-1",
+                    "log emoji": "📋",
+                },
+            )
 
     @patch("nui_shared_utils.slack_client.create_aws_client")
     @patch("nui_shared_utils.base_client.get_secret")
@@ -1153,19 +1166,14 @@ class TestLambdaContextHeader:
         # Mock Lambda client
         mock_lambda = Mock()
         mock_boto3.return_value = mock_lambda
-        mock_lambda.get_function.return_value = {
-            "Configuration": {"FunctionName": "test-function"}
-        }
+        mock_lambda.get_function.return_value = {"Configuration": {"FunctionName": "test-function"}}
 
         # Mock config file check
         with patch("os.path.exists") as mock_exists:
             mock_exists.return_value = False
 
             # Create client WITHOUT custom service name
-            slack = SlackClient(
-                secret_name="test-secret",
-                account_names={"123456789012": "Production"}
-            )
+            slack = SlackClient(secret_name="test-secret", account_names={"123456789012": "Production"})
 
             # Simulate Lambda handler providing context with ARN
             mock_context = Mock()
@@ -1187,14 +1195,17 @@ class TestLambdaContextHeader:
             assert "test-function" in header_text
 
             # All header elements should be present
-            self.assert_header_format(header_text, {
-                "robot emoji": "🤖",
-                "function name": "test-function",  # Original function name
-                "account name": "Production",
-                "account ID": "(123456789012)",
-                "region": "eu-west-1",
-                "log emoji": "📋"
-            })
+            self.assert_header_format(
+                header_text,
+                {
+                    "robot emoji": "🤖",
+                    "function name": "test-function",  # Original function name
+                    "account name": "Production",
+                    "account ID": "(123456789012)",
+                    "region": "eu-west-1",
+                    "log emoji": "📋",
+                },
+            )
 
     @patch("nui_shared_utils.slack_client.create_aws_client")
     @patch("nui_shared_utils.base_client.get_secret")
@@ -1632,7 +1643,11 @@ class TestSlackCredentialResolution:
 
     @patch("nui_shared_utils.base_client.get_secret")
     @patch("nui_shared_utils.slack_client.WebClient")
-    @patch.dict("os.environ", {"SLACK_BOT_TOKEN": "xoxb-env-token", "SLACK_WEBHOOK_URL": "https://hooks.slack.com/xxx"}, clear=False)
+    @patch.dict(
+        "os.environ",
+        {"SLACK_BOT_TOKEN": "xoxb-env-token", "SLACK_WEBHOOK_URL": "https://hooks.slack.com/xxx"},
+        clear=False,
+    )
     def test_env_var_includes_optional_webhook(self, _mock_webclient, _mock_get_secret):
         """SLACK_WEBHOOK_URL is included when present."""
         client = SlackClient()
