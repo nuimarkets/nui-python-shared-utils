@@ -8,6 +8,13 @@ that contained them.
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING**: require Python 3.10 or newer in both the main package and the legacy
+  redirect package. Python 3.9 is no longer supported or included in CI test matrices.
+
+## [2.4] - 2026-10-20
+
 ### Added
 
 - Add an opt-in `reraise_exceptions` parameter to `powertools_handler`. When enabled,
@@ -230,7 +237,8 @@ that contained them.
 - Basic project structure
 - Python package configuration
 
-[Unreleased]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.3...HEAD
+[Unreleased]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.4...HEAD
+[2.4]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.3...2.4
 [2.3]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.2...2.3
 [2.2]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.1...2.2
 [2.1]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.0...2.1
