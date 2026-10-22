@@ -4,7 +4,7 @@ This guide covers installation, dependency management, and environment setup for
 
 ## Requirements
 
-- Python 3.9 or higher
+- Python 3.10 or higher
 - AWS credentials configured for Secrets Manager access
 - Optional: AWS CLI for credential management
 
@@ -139,7 +139,7 @@ pip install nui-python-shared-utils[all]
 
 ```bash
 # Create environment
-conda create -n nui-utils python=3.9
+conda create -n nui-utils python=3.10
 
 # Activate environment
 conda activate nui-utils
@@ -209,7 +209,7 @@ aws lambda publish-layer-version \
   --layer-name nui-python-shared-utils \
   --description "NUI Lambda Shared Utilities" \
   --zip-file fileb://nui-utils-layer.zip \
-  --compatible-runtimes python3.9 python3.10 python3.11
+  --compatible-runtimes python3.10 python3.11
 ```
 
 ### Using in Lambda Function

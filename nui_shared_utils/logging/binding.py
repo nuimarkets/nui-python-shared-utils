@@ -306,7 +306,6 @@ def log_exception(binder: Any, exc: BaseException, message: str) -> None:
         extra={
             F.ERROR_TYPE: type(exc).__name__,
             F.ERROR_MESSAGE: str(exc),
-            # 3-arg form for Python 3.9 compatibility (single-arg added in 3.10).
             F.ERROR_STACK: "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
         },
     )

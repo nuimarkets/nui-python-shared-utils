@@ -6,7 +6,7 @@ We welcome contributions to the NUI Python Shared Utilities project! This docume
 
 ### Prerequisites
 
-- Python 3.9 or higher
+- Python 3.10 or higher
 - Git
 - Virtual environment tool (venv, virtualenv, etc.)
 
