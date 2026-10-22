@@ -11,7 +11,7 @@ that wanted only the logging contract or the metrics helper still shipped it.
 
 The cost is not the code. `pytz` bundles its own copy of the Olson/IANA database (0.86 MB of a
 1.0 MB installed package, measured on `pytz==2025.2`), and that copy is redundant on
-every interpreter this package supports: `requires-python = ">=3.9"`, and `zoneinfo` has been in
+every interpreter this package supports: `requires-python = ">=3.10"`, and `zoneinfo` has been in
 the standard library since 3.9, reading the system database that Linux, macOS, and the AWS Lambda
 runtimes all ship.
 
@@ -82,8 +82,9 @@ a database to everyone:
 
 ## Load-bearing premises (supersede triggers)
 
-- **The interpreter floor stays at 3.9+.** `zoneinfo` is stdlib from 3.9. A drop below that
-  would need `backports.zoneinfo`, at which point the calculus changes.
+- **All supported interpreters include stdlib `zoneinfo`.** The package requires Python 3.10
+  or higher. Supporting an interpreter older than 3.9 would need `backports.zoneinfo`, at
+  which point the calculus changes.
 - **Target runtimes ship a system IANA database.** True of Linux, macOS, and the AWS Lambda
   runtimes today. If the primary deployment target became one that does not, `tzdata` belongs in
   the base dependencies unconditionally and this ADR's marker split is obsolete.

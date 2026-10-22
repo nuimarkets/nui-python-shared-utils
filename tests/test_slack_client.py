@@ -954,7 +954,7 @@ class TestLambdaContextHeader:
             "AWS_LAMBDA_LOG_STREAM_NAME": "2023/11/15/[$LATEST]abc123",
             "AWS_REGION": "eu-west-1",
             "STAGE": "prod",
-            "AWS_EXECUTION_ENV": "AWS_Lambda_python3.9",
+            "AWS_EXECUTION_ENV": "AWS_Lambda_python3.10",
         },
     )
     def test_lambda_header_connect_production(self, mock_webclient, mock_get_secret, mock_boto3):

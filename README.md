@@ -1,7 +1,7 @@
 # NUI Python Shared Utilities
 
 [![PyPI version](https://badge.fury.io/py/nui-python-shared-utils.svg)](https://badge.fury.io/py/nui-python-shared-utils)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Production-ready shared Python utilities for AWS Lambda functions, CLI tools, and agents. Provides standardized integrations for Slack, Elasticsearch, database, and monitoring. Built and battle-tested on the NUI platform with sensible defaults configurable for any environment.
