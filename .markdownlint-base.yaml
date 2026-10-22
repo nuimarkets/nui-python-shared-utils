@@ -1,9 +1,9 @@
 # === managed by sync-markdownlint.sh — DO NOT EDIT ===
-# Source of truth: nui-workspace config/markdownlint-base.yaml
+# Source of truth: shared tooling config/markdownlint-base.yaml
 # Change rules in the source, then run: sync-markdownlint.sh --update
-# stamp: a46e4ae86540
+# stamp: e9f1a3abeab6
 # === end managed header (sync-markdownlint.sh) ===
-# Shared markdownlint ruleset for the Connect/NUI workspace (FLAT format).
+# Shared markdownlint ruleset (FLAT format).
 # See: https://github.com/DavidAnson/markdownlint/blob/main/doc/Rules.md
 #
 # SOURCE OF TRUTH. Repos adopt this by vendoring a stamped copy as
