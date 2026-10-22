@@ -1,0 +1,66 @@
+# === managed by sync-markdownlint.sh — DO NOT EDIT ===
+# Source of truth: shared tooling config/markdownlint-base.yaml
+# Change rules in the source, then run: sync-markdownlint.sh --update
+# stamp: e9f1a3abeab6
+# === end managed header (sync-markdownlint.sh) ===
+# Shared markdownlint ruleset (FLAT format).
+# See: https://github.com/DavidAnson/markdownlint/blob/main/doc/Rules.md
+#
+# SOURCE OF TRUTH. Repos adopt this by vendoring a stamped copy as
+# `.markdownlint-base.yaml` (via sync-markdownlint.sh) and pointing their own
+# `.markdownlint-cli2.yaml` at it with `config: { extends: .markdownlint-base.yaml }`,
+# then adding repo-specific `globs`/`ignores` (and any rare repo-only rule tweaks).
+#
+# This file is FLAT (rules at top level, no `config:` wrapper) because that is
+# the format markdownlint's `extends` requires. Keep it rules-only: file
+# selection (globs) and exclusions (ignores) are per-repo.
+
+# Enable all rules by default; disables/customisations follow.
+default: true
+
+# MD013: Line length - off. Code blocks, tables, and URLs routinely exceed any
+# sane width; wrapping prose to a column is not a standard we enforce.
+MD013: false
+
+# MD033: Inline HTML - allowed. Needed for details/summary, anchors, and the
+# HTML comment markers some docs use (companions metadata, stay markers).
+MD033: false
+
+# MD034: Bare URLs - off. Bare URLs in reference docs are intentional.
+MD034: false
+
+# MD041: First line in file should be a top-level heading - off. Many docs open
+# with YAML frontmatter or a metadata block, not an H1.
+MD041: false
+
+# MD024: Multiple headings with the same content - allowed when not siblings
+# (e.g. a repeated "Example" under different sections).
+MD024:
+  siblings_only: true
+
+# MD046: Code block style - require fenced (not indented) blocks.
+MD046:
+  style: "fenced"
+
+# MD026: Trailing punctuation in headings - off. "Note:" / "Warning!" are fine.
+MD026: false
+
+# MD029: Ordered list item prefix - off. Docs mix "1. 1. 1." and "1. 2. 3." and
+# both render correctly; not worth churning.
+MD029: false
+
+# MD036: Emphasis used instead of a heading - off. Bold-as-label
+# ("**Root cause:**", date stamps) is an accepted convention here.
+MD036: false
+
+# MD040: Fenced code language - off. Not every code block has (or needs) a
+# language tag; forcing one produces noise on output samples and snippets.
+MD040: false
+
+# MD051: Link fragments should be valid - off. Cross-doc anchor validation is
+# unreliable across the workspace's mixed heading styles and generated pages.
+MD051: false
+
+# MD060: Table column style - off. Minor pipe-alignment preference; the corpus
+# has always mixed styles.
+MD060: false

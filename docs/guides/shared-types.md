@@ -103,6 +103,7 @@ client.get_connection_info() -> Dict
 ```
 
 **Connection Pool Entry Structure:**
+
 ```python
 {
     "connection": pymysql.Connection,
@@ -111,6 +112,7 @@ client.get_connection_info() -> Dict
 ```
 
 **Connection Info Response:**
+
 ```python
 {
     "host": str,
@@ -169,6 +171,7 @@ client.get_indices_info(pattern="*") -> List[Dict]
 ```
 
 **Service Stats Response:**
+
 ```python
 {
     "service": str,
@@ -183,6 +186,7 @@ client.get_indices_info(pattern="*") -> List[Dict]
 ```
 
 **Cluster Info Response:**
+
 ```python
 {
     "version": str,
@@ -222,6 +226,7 @@ client.get_bot_info() -> Dict
 ```
 
 **Lambda Context Structure:**
+
 ```python
 {
     "function_name": str,
@@ -240,6 +245,7 @@ client.get_bot_info() -> Dict
 ```
 
 **Bot Info Response:**
+
 ```python
 {
     "bot_id": str,
@@ -274,6 +280,7 @@ result = matcher.categorize_error(exception)
 ```
 
 **Categorized Error Response:**
+
 ```python
 {
     "error": str,
@@ -286,6 +293,7 @@ result = matcher.categorize_error(exception)
 ```
 
 **Built-in Error Categories:**
+
 - `data_format` - JSON parsing errors
 - `authentication` - Auth failures
 - `database` - DB timeouts
@@ -310,6 +318,7 @@ summary = aggregator.get_summary()
 ```
 
 **Error Summary Response:**
+
 ```python
 {
     "total_errors": int,
@@ -360,6 +369,7 @@ publisher.flush() -> bool
 ```
 
 **Metric Data Structure (internal buffer):**
+
 ```python
 {
     "MetricName": str,
@@ -429,6 +439,7 @@ with TimedMetric(publisher, "DatabaseQuery", unit="Milliseconds", dimensions=Non
 ### Credential Structures
 
 **Database Credentials:**
+
 ```python
 {
     "host": str,
@@ -440,6 +451,7 @@ with TimedMetric(publisher, "DatabaseQuery", unit="Milliseconds", dimensions=Non
 ```
 
 **Elasticsearch Credentials:**
+
 ```python
 {
     "host": str,                      # With port (e.g., "elastic:9200")
@@ -449,6 +461,7 @@ with TimedMetric(publisher, "DatabaseQuery", unit="Milliseconds", dimensions=Non
 ```
 
 **Slack Credentials:**
+
 ```python
 {
     "bot_token": str,
@@ -492,6 +505,7 @@ stats = get_pool_stats()
 ```
 
 **Pool Stats Response:**
+
 ```python
 {
     "total_pools": int,
@@ -514,6 +528,7 @@ response = handle_lambda_error(error, context)
 ```
 
 **Lambda Error Response:**
+
 ```python
 {
     "statusCode": 500,

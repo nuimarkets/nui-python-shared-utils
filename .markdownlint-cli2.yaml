@@ -1,38 +1,8 @@
 # Markdownlint configuration for nui-python-shared-utils
-# Extends workspace config with project-specific overrides
+# Shared rules are vendored by sync-markdownlint.sh.
 
 config:
-  # Enable all rules by default
-  default: true
-
-  # MD013: Line length - disabled (technical docs need long lines for URLs/commands)
-  MD013: false
-
-  # MD033: Inline HTML - allowed (needed for complex formatting)
-  MD033: false
-
-  # MD036: No emphasis as heading - disabled (acceptable in planning docs)
-  MD036: false
-
-  # MD040: Fenced code language - disabled (not all code blocks need language tags)
-  MD040: false
-
-  # MD041: First line heading - disabled (docs may start with metadata)
-  MD041: false
-
-  # MD024: Multiple headings with same content - allowed with different levels
-  MD024:
-    siblings_only: true
-
-  # MD034: Bare URLs - allowed (sometimes intentional)
-  MD034: false
-
-  # MD046: Code block style - prefer fenced
-  MD046:
-    style: "fenced"
-
-  # MD060: Table column style - disabled (minor formatting preference)
-  MD060: false
+  extends: .markdownlint-base.yaml
 
 # File patterns to check
 globs:
