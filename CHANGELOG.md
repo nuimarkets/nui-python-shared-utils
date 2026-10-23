@@ -13,6 +13,12 @@ that contained them.
 - **BREAKING**: require Python 3.10 or newer in both the main package and the legacy
   redirect package. Python 3.9 is no longer supported or included in CI test matrices.
 
+### Fixed
+
+- Use canonical IANA names `America/New_York` and `America/Los_Angeles` for US timezone
+  constants and option labels, so importing timezone utilities and Slack formatting works
+  on systems without legacy timezone links.
+
 ## [2.4] - 2026-10-20
 
 ### Added
