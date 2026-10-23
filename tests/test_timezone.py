@@ -8,9 +8,11 @@ import sys
 import textwrap
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
+import nui_shared_utils.timezone as timezone_utils
 from nui_shared_utils.timezone import nz_time, format_nz_time, NZ_TZ
 
 
@@ -258,6 +260,41 @@ class TestAmbiguousWallTimes:
 
 class TestTimezoneConstants:
     """Tests for timezone constants."""
+
+    def test_all_zone_keys_are_canonical(self):
+        # Canonical names for the supported regions, from IANA's zone1970.tab:
+        # https://data.iana.org/time-zones/tzdb/zone1970.tab
+        # Keep this list independent of the host database: available_timezones()
+        # also includes optional backward links on many systems.
+        canonical_keys = {
+            "Pacific/Auckland",
+            "Australia/Sydney",
+            "America/New_York",
+            "America/Los_Angeles",
+            "Europe/London",
+        }
+        zone_keys = {value.key for value in vars(timezone_utils).values() if isinstance(value, ZoneInfo)}
+        assert zone_keys, "No timezone constants were checked"
+        assert zone_keys <= canonical_keys, f"Non-canonical or unreviewed zone keys: {zone_keys - canonical_keys}"
+
+    def test_option_labels_use_canonical_zone_keys(self):
+        labels = dict(timezone_utils.get_timezone_options())
+        assert labels["us_east"] == "US Eastern (America/New_York)"
+        assert labels["us_west"] == "US Pacific (America/Los_Angeles)"
+
+    @pytest.mark.parametrize(
+        "zone, month, offset, abbreviation",
+        [
+            (timezone_utils.US_EAST_TZ, 1, -5, "EST"),
+            (timezone_utils.US_EAST_TZ, 7, -4, "EDT"),
+            (timezone_utils.US_WEST_TZ, 1, -8, "PST"),
+            (timezone_utils.US_WEST_TZ, 7, -7, "PDT"),
+        ],
+    )
+    def test_us_offsets_and_dst(self, zone, month, offset, abbreviation):
+        local = datetime(2024, month, 15, 12, tzinfo=timezone.utc).astimezone(zone)
+        assert local.utcoffset() == timedelta(hours=offset)
+        assert local.tzname() == abbreviation
 
     def test_nz_tz_constant(self):
         """Test that NZ_TZ is properly configured."""

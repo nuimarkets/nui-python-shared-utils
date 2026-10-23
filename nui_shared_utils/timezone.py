@@ -13,8 +13,8 @@ from zoneinfo import ZoneInfo
 # Supported timezones
 NZ_TZ = ZoneInfo("Pacific/Auckland")  # Primary timezone
 AUS_TZ = ZoneInfo("Australia/Sydney")
-US_EAST_TZ = ZoneInfo("US/Eastern")
-US_WEST_TZ = ZoneInfo("US/Pacific")
+US_EAST_TZ = ZoneInfo("America/New_York")
+US_WEST_TZ = ZoneInfo("America/Los_Angeles")
 EUR_TZ = ZoneInfo("Europe/London")
 
 
@@ -115,7 +115,7 @@ def get_timezone_options() -> List[Tuple[str, str]]:
     return [
         ("nz", "New Zealand (Pacific/Auckland)"),
         ("aus", "Australia (Australia/Sydney)"),
-        ("us_east", "US Eastern (US/Eastern)"),
-        ("us_west", "US Pacific (US/Pacific)"),
+        ("us_east", "US Eastern (America/New_York)"),
+        ("us_west", "US Pacific (America/Los_Angeles)"),
         ("eur", "Europe (Europe/London)"),
     ]
