@@ -80,7 +80,7 @@ def get_powertools_logger(
     Create AWS Powertools Logger with Elasticsearch-compatible formatting.
 
     Args:
-        service_name: Service identifier (e.g., "nui-tender-analyser")
+        service_name: Service identifier (e.g., "nui-tender-operations")
         level: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         local_dev_colors: Enable coloredlogs for local development
 
@@ -177,7 +177,7 @@ def powertools_handler(
 
     Args:
         service_name: Service identifier for logging and metrics dimensions
-        metrics_namespace: CloudWatch namespace (e.g., "NUI/TenderAnalyser")
+        metrics_namespace: CloudWatch namespace (e.g., "NUI/TenderOperations")
         slack_alert_channel: Slack channel for error alerts (e.g., "#alerts")
         slack_account_names: AWS account ID to display-name mapping for alerts
         slack_account_names_config: YAML file containing account-name defaults
