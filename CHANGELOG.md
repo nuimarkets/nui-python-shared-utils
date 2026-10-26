@@ -12,8 +12,9 @@ that contained them.
 
 - **BREAKING**: require Python 3.10 or newer in both the main package and the legacy
   redirect package. Python 3.9 is no longer supported or included in CI test matrices.
-- Powertools docstring and guide examples name `nui-tender-operations`, the repo formerly
-  `nui-tender-analyser`. Docs only, no behaviour change.
+- Powertools docstring and guide examples use generic service and namespace names
+  (`order-processor`, `Ecommerce/Orders`) instead of internal repo names. Docs only, no
+  behaviour change.
 
 ### Fixed
 
