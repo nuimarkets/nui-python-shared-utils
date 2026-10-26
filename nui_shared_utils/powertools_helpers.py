@@ -75,7 +75,7 @@ def get_powertools_logger(
     and enforces UTC timezone for consistency with log aggregation systems.
 
     Args:
-        service_name: Service identifier (e.g., "nui-tender-analyser", "connect-email-ingest")
+        service_name: Service identifier (e.g., "order-processor", "email-ingest")
         level: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL). Default: INFO
         local_dev_colors: Enable coloredlogs for local development. Default: True
 
@@ -182,7 +182,7 @@ def powertools_handler(
 
     Args:
         service_name: Service identifier for logging and metrics dimensions
-        metrics_namespace: CloudWatch namespace for metrics (e.g., "NUI/TenderAnalyser").
+        metrics_namespace: CloudWatch namespace for metrics (e.g., "Ecommerce/Orders").
                           If None, metrics publishing is disabled.
         slack_alert_channel: Slack channel for error alerts (e.g., "#alerts", "#errors").
                             If None, Slack alerting is disabled.
