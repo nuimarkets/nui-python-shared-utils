@@ -26,7 +26,9 @@ MySQL defaults; `PostgreSQLClient` applies the PostgreSQL ones on both the env a
 The Elasticsearch host resolves as: the client's `host` argument, then `ES_HOST` (or
 `ELASTICSEARCH_HOST`), then a host set with `nui.configure(es_host=...)`, then the secret's
 `host` field, then the built-in default
-(`localhost:9200`). The client and `get_elasticsearch_credentials` use the same order.
+(`localhost:9200`). The client and `get_elasticsearch_credentials` use the same order. A `host`
+key in an explicit `credentials` dict ranks where the secret's does, so to pin one client's host
+pass `host=` instead.
 
 ## Environment Variables
 
@@ -173,7 +175,8 @@ The package expects AWS secrets in specific JSON formats:
 
 **Optional Fields:**
 
-- `host` - Used when `ES_HOST`, `ELASTICSEARCH_HOST` and `configure(es_host=...)` are all unset
+- `host` - Used when the credentials come from this secret (no `ES_PASSWORD` or `ES_PASS`) and
+  no `host=` argument, `ES_HOST`, `ELASTICSEARCH_HOST` or `configure(es_host=...)` names one
 - `username` - Defaults to "elastic" if not provided
 
 #### Database Credentials
@@ -188,7 +191,8 @@ The package expects AWS secrets in specific JSON formats:
 }
 ```
 
-**All fields are required** for database connections.
+`host`, `username` and `password` are required. A missing `port` or `database` takes the
+engine's default: `3306`/`app` for MySQL, `5432`/`postgres` for `PostgreSQLClient`.
 
 #### Slack Credentials
 

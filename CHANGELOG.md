@@ -16,7 +16,8 @@ that contained them.
   set, they return the env values (MySQL defaults for unset `DB_PORT`, `DB_USERNAME`,
   `DB_DATABASE`) and make no AWS call, even when a `secret_name` is passed, and they no longer
   raise for a missing secret name in that case. A caller that reads a second database or
-  workspace through `get_database_credentials("<other secret>")` while the `DB_*` env vars
+  workspace through `get_database_credentials("<other secret>")` or
+  `get_slack_credentials("<other secret>")` while the `DB_*` or `SLACK_BOT_TOKEN` env vars
   describe the first gets the first; read that secret with `get_secret` and map its fields.
 - `ElasticsearchClient` reads the `host` field of its resolved credentials. Host order on the
   client and `get_elasticsearch_credentials` is: `host` argument (client only), `ES_HOST` or

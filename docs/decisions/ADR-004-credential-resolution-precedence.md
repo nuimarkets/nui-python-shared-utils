@@ -33,8 +33,10 @@ helper honoured.
 Credentials resolve in a fixed order, first match wins, owned by `BaseClient._resolve_credentials`
 in `base_client.py`:
 
-1. **Explicit `credentials` dict** passed to the constructor. Returned as-is; nothing else is
-   consulted. The caller owns these values and the package does not merge or second-guess them.
+1. **Explicit `credentials` dict** passed to the constructor. Returned as-is; no other credential
+   source is consulted. The caller owns these values and the package does not merge or
+   second-guess them. An Elasticsearch `host` key in the dict is the one exception: it follows
+   the host order below.
 2. **Per-client environment variables**, via each client's `_resolve_credentials_from_env` override
    (Elasticsearch reads `ES_PASSWORD`/`ES_PASS` in `es_client.py`; database requires
    `DB_HOST` + `DB_PASSWORD` in `db_client.py`; Slack requires `SLACK_BOT_TOKEN` in
@@ -56,7 +58,8 @@ The Elasticsearch host follows its own order on both paths: the client's `host` 
 `ES_HOST` (or `ELASTICSEARCH_HOST`), then the `host` field of the resolved credentials (the
 secret's, or an explicit dict's), then `localhost:9200`. A host set with `configure(es_host=...)`
 ranks between the env var and the credentials' `host`, because a caller that set it chose it; an
-`ES_HOST` the config picked up from the environment at startup does not.
+`ES_HOST` the config picked up from the environment at startup does not. To pin the host of one
+client whatever the environment holds, pass its `host` argument.
 
 ## Alternatives considered
 
