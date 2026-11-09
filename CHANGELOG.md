@@ -23,7 +23,8 @@ that contained them.
   configured default.
 - `ElasticsearchClient` and `SlackClient` normalise credentials fetched from Secrets Manager to
   the same shape the helpers return (`host`/`username`/`password`, and `bot_token`/`webhook_url`
-  with a legacy `token` field mapped to `bot_token`). `SlackClient.credentials` from env vars
+  with a legacy `token` field used when `bot_token` is missing, null or empty; the helper used
+  to keep a null or empty `bot_token`). `SlackClient.credentials` from env vars
   always carries a `webhook_url` key, `None` when `SLACK_WEBHOOK_URL` is unset.
 
 - **BREAKING**: require Python 3.10 or newer in both the main package and the legacy
