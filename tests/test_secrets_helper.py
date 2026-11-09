@@ -384,3 +384,39 @@ class TestClearCache:
         # Verify next call hits AWS again
         secrets_helper.get_secret("test-secret")
         assert mock_secrets_manager.get_secret_value.call_count == 2
+
+
+class TestHelperEnvBeforeSecretsManager:
+    """The DB and Slack helpers check env vars before Secrets Manager, like the clients."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_env(self, monkeypatch):
+        for name in [
+            "DB_HOST",
+            "DB_PASSWORD",
+            "DB_PORT",
+            "DB_USERNAME",
+            "DB_DATABASE",
+            "SLACK_BOT_TOKEN",
+            "SLACK_WEBHOOK_URL",
+        ]:
+            monkeypatch.delenv(name, raising=False)
+
+    def test_database_helper_uses_env_without_secrets_manager(self, monkeypatch):
+        monkeypatch.setenv("DB_HOST", "h")
+        monkeypatch.setenv("DB_PASSWORD", "p")
+        monkeypatch.setenv("DB_CREDENTIALS_SECRET", "db")
+        with patch("nui_shared_utils.secrets_helper.get_secret") as get_secret:
+            result = secrets_helper.get_database_credentials()
+
+        get_secret.assert_not_called()
+        assert result == {"host": "h", "port": 3306, "username": "root", "password": "p", "database": "app"}
+
+    def test_slack_helper_uses_env_without_secrets_manager(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-env")
+        monkeypatch.setenv("SLACK_CREDENTIALS_SECRET", "sl")
+        with patch("nui_shared_utils.secrets_helper.get_secret") as get_secret:
+            result = secrets_helper.get_slack_credentials()
+
+        get_secret.assert_not_called()
+        assert result == {"bot_token": "xoxb-env", "webhook_url": None}

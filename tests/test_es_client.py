@@ -571,3 +571,27 @@ class TestElasticsearchCredentialResolution:
 
         mock_get_secret.assert_called_once_with("test-es-secret")
         assert client.credentials["password"] == "sm-pass"
+
+
+class TestElasticsearchHostResolution:
+    """The client and get_elasticsearch_credentials pick the same host."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_es_env(self, monkeypatch):
+        for name in ["ES_HOST", "ELASTICSEARCH_HOST", "ES_PASSWORD", "ES_PASS", "ES_USERNAME", "ES_USER"]:
+            monkeypatch.delenv(name, raising=False)
+
+    def test_client_and_helper_agree_on_host_from_secret(self):
+        from nui_shared_utils import secrets_helper
+
+        secret = {"host": "es-from-secret:9200", "username": "elastic", "password": "pw"}
+        with patch("nui_shared_utils.secrets_helper.get_secret", return_value=dict(secret)):
+            helper_host = secrets_helper.get_elasticsearch_credentials("es")["host"]
+        with patch("nui_shared_utils.base_client.get_secret", return_value=dict(secret)), patch(
+            "nui_shared_utils.es_client.Elasticsearch"
+        ) as es:
+            ElasticsearchClient(secret_name="es")
+            client_url = es.call_args[0][0][0]
+
+        assert helper_host == "es-from-secret:9200"
+        assert client_url == "http://es-from-secret:9200"
