@@ -54,7 +54,9 @@ for MySQL and PostgreSQL), so the two paths cannot drift apart.
 
 The Elasticsearch host follows its own order on both paths: the client's `host` argument, then
 `ES_HOST` (or `ELASTICSEARCH_HOST`), then the `host` field of the resolved credentials (the
-secret's, or an explicit dict's), then the configured default.
+secret's, or an explicit dict's), then `localhost:9200`. A host set with `configure(es_host=...)`
+ranks between the env var and the credentials' `host`, because a caller that set it chose it; an
+`ES_HOST` the config picked up from the environment at startup does not.
 
 ## Alternatives considered
 

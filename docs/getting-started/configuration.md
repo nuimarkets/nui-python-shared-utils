@@ -24,7 +24,8 @@ they return those values without calling Secrets Manager. `get_database_credenti
 MySQL defaults; `PostgreSQLClient` applies the PostgreSQL ones on both the env and the secret path.
 
 The Elasticsearch host resolves as: the client's `host` argument, then `ES_HOST` (or
-`ELASTICSEARCH_HOST`), then the secret's `host` field, then the configured default
+`ELASTICSEARCH_HOST`), then a host set with `nui.configure(es_host=...)`, then the secret's
+`host` field, then the built-in default
 (`localhost:9200`). The client and `get_elasticsearch_credentials` use the same order.
 
 ## Environment Variables
@@ -172,7 +173,7 @@ The package expects AWS secrets in specific JSON formats:
 
 **Optional Fields:**
 
-- `host` - Used when `ES_HOST` and `ELASTICSEARCH_HOST` are unset; overrides the configured default
+- `host` - Used when `ES_HOST`, `ELASTICSEARCH_HOST` and `configure(es_host=...)` are all unset
 - `username` - Defaults to "elastic" if not provided
 
 #### Database Credentials
@@ -283,6 +284,8 @@ slack = nui.SlackClient(secret_name="custom-slack-secret")
 es_creds = nui.get_elasticsearch_credentials("custom-es-secret")
 db_creds = nui.get_database_credentials("custom-db-secret")
 slack_creds = nui.get_slack_credentials("custom-slack-secret")
+# These three return the env values instead, ignoring the secret name, when the
+# client's credential env vars are set (ES_PASSWORD, DB_HOST + DB_PASSWORD, SLACK_BOT_TOKEN).
 
 # Generic secret retrieval
 api_keys = nui.get_secret("my-service/api-keys")

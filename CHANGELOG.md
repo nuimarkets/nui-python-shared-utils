@@ -10,22 +10,27 @@ that contained them.
 
 ### Changed
 
-- `get_database_credentials` and `get_slack_credentials` check environment variables before
-  Secrets Manager, matching `DatabaseClient`, `SlackClient` and `get_elasticsearch_credentials`.
-  With `DB_HOST` and `DB_PASSWORD` set, or `SLACK_BOT_TOKEN` set, they return the env values
-  (MySQL defaults for unset `DB_PORT`, `DB_USERNAME`, `DB_DATABASE`) and make no AWS call, and
-  they no longer raise for a missing secret name in that case. Callers that set these env vars
-  but expect the secret's values must unset them.
+- **BREAKING**: `get_database_credentials` and `get_slack_credentials` check environment
+  variables before Secrets Manager, matching `DatabaseClient`, `SlackClient` and
+  `get_elasticsearch_credentials`. With `DB_HOST` and `DB_PASSWORD` set, or `SLACK_BOT_TOKEN`
+  set, they return the env values (MySQL defaults for unset `DB_PORT`, `DB_USERNAME`,
+  `DB_DATABASE`) and make no AWS call, even when a `secret_name` is passed, and they no longer
+  raise for a missing secret name in that case. A caller that reads a second database or
+  workspace through `get_database_credentials("<other secret>")` while the `DB_*` env vars
+  describe the first gets the first; read that secret with `get_secret` and map its fields.
 - `ElasticsearchClient` reads the `host` field of its resolved credentials. Host order on the
   client and `get_elasticsearch_credentials` is: `host` argument (client only), `ES_HOST` or
-  `ELASTICSEARCH_HOST`, the credentials' `host`, then the configured default. A client built
-  from a secret that carries a host with no `ES_HOST` set connects to that host instead of the
-  configured default.
-- `ElasticsearchClient` and `SlackClient` normalise credentials fetched from Secrets Manager to
-  the same shape the helpers return (`host`/`username`/`password`, and `bot_token`/`webhook_url`
-  with a legacy `token` field used when `bot_token` is missing, null or empty; the helper used
-  to keep a null or empty `bot_token`). `SlackClient.credentials` from env vars
-  always carries a `webhook_url` key, `None` when `SLACK_WEBHOOK_URL` is unset.
+  `ELASTICSEARCH_HOST`, a host set with `configure(es_host=...)`, the credentials' `host`, then
+  `localhost:9200`. A client built from a secret that carries a host, with neither `ES_HOST` nor
+  `configure(es_host=...)` set, connects to that host instead of `localhost:9200`. The helper
+  appends `:9200` to any host that is not a URL and names no port, including one that starts
+  with `http` (`httpd-es`), as the client does.
+- `ElasticsearchClient` and `SlackClient` add the normalised fields the helpers return to
+  credentials fetched from Secrets Manager (`host`/`username`/`password`, and
+  `bot_token`/`webhook_url`), keeping the secret's other keys. A legacy `token` field is used
+  when `bot_token` is missing, null or empty; the helper used to keep a null or empty
+  `bot_token`. `SlackClient.credentials` from env vars always carries a `webhook_url` key,
+  `None` when `SLACK_WEBHOOK_URL` is unset.
 
 - **BREAKING**: require Python 3.10 or newer in both the main package and the legacy
   redirect package. Python 3.9 is no longer supported or included in CI test matrices.
