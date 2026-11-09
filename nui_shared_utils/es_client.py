@@ -2,7 +2,6 @@
 Refactored Elasticsearch client using BaseClient for DRY code patterns.
 """
 
-import os
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, Iterator, List, Optional, Any, Tuple
@@ -11,7 +10,8 @@ from elasticsearch import Elasticsearch
 from elasticsearch.helpers import streaming_bulk as es_streaming_bulk
 
 from .base_client import BaseClient, ServiceHealthMixin
-from .utils import handle_client_errors, resolve_config_value
+from .utils import handle_client_errors
+from .secrets_helper import _es_credentials_from_env, _es_host_with_port, _normalise_es_secret, _resolve_es_host
 
 log = logging.getLogger(__name__)
 
@@ -55,29 +55,27 @@ class ElasticsearchClient(BaseClient, ServiceHealthMixin):
         Accepts both conventions: ES_PASSWORD/ES_USERNAME and ES_PASS/ES_USER.
         Password is required to trigger. Username defaults to "elastic".
         """
-        password = os.environ.get("ES_PASSWORD") or os.environ.get("ES_PASS")
-        if not password:
-            return None
-        return {
-            "username": os.environ.get("ES_USERNAME") or os.environ.get("ES_USER") or "elastic",
-            "password": password,
-        }
+        return _es_credentials_from_env()
+
+    def _fetch_credentials_from_sm(self, secret_name: Optional[str]) -> Dict[str, Any]:
+        """Fetch from Secrets Manager; normalise host, username, password and keep any other keys."""
+        raw = super()._fetch_credentials_from_sm(secret_name)
+        return {**raw, **_normalise_es_secret(raw)}
 
     def _create_service_client(self) -> Elasticsearch:
         """Create Elasticsearch client with resolved configuration."""
-        # Resolve host using utility
-        host = resolve_config_value(
-            self._host_override,
-            ["ES_HOST", "ELASTICSEARCH_HOST"],
-            getattr(self.config, "es_host", "localhost:9200")
-        )
+        # Host precedence: constructor arg > ES_HOST/ELASTICSEARCH_HOST > configure(es_host=...)
+        # > credentials "host" (e.g. from the secret) > default. Shared with get_elasticsearch_credentials.
+        if self._host_override is not None:
+            host = self._host_override
+        else:
+            host = _resolve_es_host(self.credentials.get("host"))
+        host = _es_host_with_port(host)
 
         parsed = urlparse(host)
         if parsed.scheme and parsed.netloc:  # Valid URL with scheme://netloc
             es_url = host
         else:
-            if ":" not in host:
-                host = f"{host}:9200"
             scheme = self.client_config.get("scheme", "http")
             es_url = f"{scheme}://{host}"
 

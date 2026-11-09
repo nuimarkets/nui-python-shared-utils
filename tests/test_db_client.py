@@ -675,3 +675,84 @@ class TestDatabaseCredentialResolution:
 
         # Should fall through to SM since DB_PASSWORD is missing
         mock_get_creds.assert_called_once()
+
+
+_DB_ENV_VARS = ["DB_HOST", "DB_PASSWORD", "DB_PORT", "DB_USERNAME", "DB_DATABASE", "DB_CREDENTIALS_SECRET"]
+
+
+class TestPostgreSQLCredentialResolution:
+    """PostgreSQLClient resolves credentials with Postgres defaults on every tier."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_db_env(self, monkeypatch):
+        for name in _DB_ENV_VARS:
+            monkeypatch.delenv(name, raising=False)
+
+    def test_secret_without_port_gets_postgres_defaults(self):
+        from nui_shared_utils.db_client import PostgreSQLClient
+
+        secret = {"host": "pg-from-secret", "username": "u", "password": "p"}
+        with patch("nui_shared_utils.secrets_helper.get_secret", return_value=dict(secret)):
+            client = PostgreSQLClient(secret_name="pg")
+
+        assert client.credentials["host"] == "pg-from-secret"
+        assert client.credentials["port"] == 5432
+        assert client.credentials["database"] == "postgres"
+
+    def test_env_vars_get_postgres_defaults(self, monkeypatch):
+        from nui_shared_utils.db_client import PostgreSQLClient
+
+        monkeypatch.setenv("DB_HOST", "h")
+        monkeypatch.setenv("DB_PASSWORD", "p")
+        with patch("nui_shared_utils.secrets_helper.get_secret") as get_secret:
+            client = PostgreSQLClient()
+
+        get_secret.assert_not_called()
+        assert client.credentials["port"] == 5432
+        assert client.credentials["username"] == "postgres"
+        assert client.credentials["database"] == "postgres"
+
+    def test_secret_values_win_over_defaults(self):
+        from nui_shared_utils.db_client import PostgreSQLClient
+
+        secret = {"endpoint": "pg-host", "user": "u", "password": "p", "port": "6543", "dbname": "reports"}
+        with patch("nui_shared_utils.secrets_helper.get_secret", return_value=dict(secret)):
+            client = PostgreSQLClient(secret_name="pg")
+
+        assert client.credentials == {
+            "host": "pg-host",
+            "port": 6543,
+            "username": "u",
+            "password": "p",
+            "database": "reports",
+        }
+
+    def test_auth_prefixed_secret_keys_still_preferred(self):
+        from nui_shared_utils.db_client import PostgreSQLClient
+
+        secret = {"host": "plain", "password": "p", "auth_host": "auth-host", "auth_password": "ap"}
+        with patch("nui_shared_utils.secrets_helper.get_secret", return_value=dict(secret)):
+            client = PostgreSQLClient(secret_name="pg")
+
+        assert client.credentials["host"] == "auth-host"
+        assert client.credentials["port"] == 5432
+
+    def test_auth_prefixed_keys_ignored_when_not_requested(self):
+        from nui_shared_utils.db_client import PostgreSQLClient
+
+        secret = {"host": "plain", "password": "p", "auth_host": "auth-host"}
+        with patch("nui_shared_utils.secrets_helper.get_secret", return_value=dict(secret)):
+            client = PostgreSQLClient(secret_name="pg", use_auth_credentials=False)
+
+        assert client.credentials["host"] == "plain"
+        assert client.credentials["port"] == 5432
+        assert client.credentials["database"] == "postgres"
+
+    def test_invalid_db_port_env_raises(self, monkeypatch):
+        from nui_shared_utils.db_client import PostgreSQLClient
+
+        monkeypatch.setenv("DB_HOST", "h")
+        monkeypatch.setenv("DB_PASSWORD", "p")
+        monkeypatch.setenv("DB_PORT", "not-a-port")
+        with pytest.raises(ValueError, match="DB_PORT must be an integer"):
+            PostgreSQLClient()

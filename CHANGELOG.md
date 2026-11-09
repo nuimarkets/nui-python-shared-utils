@@ -10,6 +10,29 @@ that contained them.
 
 ### Changed
 
+- **BREAKING**: `get_database_credentials` and `get_slack_credentials` check environment
+  variables before Secrets Manager, matching `DatabaseClient`, `SlackClient` and
+  `get_elasticsearch_credentials`. With `DB_HOST` and `DB_PASSWORD` set, or `SLACK_BOT_TOKEN`
+  set, they return the env values (MySQL defaults for unset `DB_PORT`, `DB_USERNAME`,
+  `DB_DATABASE`) and make no AWS call, even when a `secret_name` is passed, and they no longer
+  raise for a missing secret name in that case. A caller that reads a second database or
+  workspace through `get_database_credentials("<other secret>")` or
+  `get_slack_credentials("<other secret>")` while the `DB_*` or `SLACK_BOT_TOKEN` env vars
+  describe the first gets the first; read that secret with `get_secret` and map its fields.
+- `ElasticsearchClient` reads the `host` field of its resolved credentials. Host order on the
+  client and `get_elasticsearch_credentials` is: `host` argument (client only), `ES_HOST` or
+  `ELASTICSEARCH_HOST`, a host set with `configure(es_host=...)`, the credentials' `host`, then
+  `localhost:9200`. A client built from a secret that carries a host, with neither `ES_HOST` nor
+  `configure(es_host=...)` set, connects to that host instead of `localhost:9200`. The helper
+  appends `:9200` to any host that is not a URL and names no port, including one that starts
+  with `http` (`httpd-es`), as the client does.
+- `ElasticsearchClient` and `SlackClient` add the normalised fields the helpers return to
+  credentials fetched from Secrets Manager (`host`/`username`/`password`, and
+  `bot_token`/`webhook_url`), keeping the secret's other keys. A legacy `token` field is used
+  when `bot_token` is missing, null or empty; the helper used to keep a null or empty
+  `bot_token`. `SlackClient.credentials` from env vars always carries a `webhook_url` key,
+  `None` when `SLACK_WEBHOOK_URL` is unset.
+
 - **BREAKING**: require Python 3.10 or newer in both the main package and the legacy
   redirect package. Python 3.9 is no longer supported or included in CI test matrices.
 - Powertools docstring and guide examples use generic service and namespace names
@@ -18,6 +41,8 @@ that contained them.
 
 ### Fixed
 
+- `PostgreSQLClient` given a secret with no `port` or `database` fills PostgreSQL defaults
+  (`5432`, `postgres`) instead of the MySQL ones (`3306`, `app`).
 - Use canonical IANA names `America/New_York` and `America/Los_Angeles` for US timezone
   constants and option labels, so importing timezone utilities and Slack formatting works
   on systems without legacy timezone links.

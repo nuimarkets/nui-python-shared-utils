@@ -18,6 +18,18 @@ All clients (Slack, Elasticsearch, Database) resolve credentials in this order:
 2. **Credential environment variables** - Per-client env vars, skips Secrets Manager
 3. **AWS Secrets Manager** - Default behavior (unchanged)
 
+The helper functions `get_elasticsearch_credentials`, `get_database_credentials` and
+`get_slack_credentials` follow the same order from step 2: when the client's env vars are set
+they return those values without calling Secrets Manager. `get_database_credentials` applies the
+MySQL defaults; `PostgreSQLClient` applies the PostgreSQL ones on both the env and the secret path.
+
+The Elasticsearch host resolves as: the client's `host` argument, then `ES_HOST` (or
+`ELASTICSEARCH_HOST`), then a host set with `nui.configure(es_host=...)`, then the secret's
+`host` field, then the built-in default
+(`localhost:9200`). The client and `get_elasticsearch_credentials` use the same order. A `host`
+key in an explicit `credentials` dict ranks where the secret's does, so to pin one client's host
+pass `host=` instead.
+
 ## Environment Variables
 
 ### Core Configuration
@@ -163,7 +175,8 @@ The package expects AWS secrets in specific JSON formats:
 
 **Optional Fields:**
 
-- `host` - Can override ES_HOST if provided
+- `host` - Used when the credentials come from this secret (no `ES_PASSWORD` or `ES_PASS`) and
+  no `host=` argument, `ES_HOST`, `ELASTICSEARCH_HOST` or `configure(es_host=...)` names one
 - `username` - Defaults to "elastic" if not provided
 
 #### Database Credentials
@@ -178,7 +191,8 @@ The package expects AWS secrets in specific JSON formats:
 }
 ```
 
-**All fields are required** for database connections.
+`host`, `username` and `password` are required. A missing `port` or `database` takes the
+engine's default: `3306`/`app` for MySQL, `5432`/`postgres` for `PostgreSQLClient`.
 
 #### Slack Credentials
 
@@ -274,6 +288,8 @@ slack = nui.SlackClient(secret_name="custom-slack-secret")
 es_creds = nui.get_elasticsearch_credentials("custom-es-secret")
 db_creds = nui.get_database_credentials("custom-db-secret")
 slack_creds = nui.get_slack_credentials("custom-slack-secret")
+# These three return the env values instead, ignoring the secret name, when the
+# client's credential env vars are set (ES_PASSWORD, DB_HOST + DB_PASSWORD, SLACK_BOT_TOKEN).
 
 # Generic secret retrieval
 api_keys = nui.get_secret("my-service/api-keys")

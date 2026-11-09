@@ -2,7 +2,6 @@
 Refactored Database client using BaseClient for DRY code patterns.
 """
 
-import os
 import time
 import logging
 from typing import Dict, List, Optional, Any
@@ -11,7 +10,7 @@ import pymysql
 
 from .base_client import BaseClient, ServiceHealthMixin
 from .utils import handle_client_errors, safe_close_connection
-from .secrets_helper import get_database_credentials
+from .secrets_helper import get_database_credentials, _db_credentials_from_env, _normalise_db_secret
 
 # Optional PostgreSQL support
 try:
@@ -117,26 +116,8 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
         return None
 
     def _resolve_credentials_from_env(self) -> Optional[Dict[str, Any]]:
-        """Resolve MySQL credentials from environment variables.
-
-        Requires both DB_HOST and DB_PASSWORD to trigger.
-        """
-        host = os.environ.get("DB_HOST")
-        password = os.environ.get("DB_PASSWORD")
-        if not host or not password:
-            return None
-        port_str = os.environ.get("DB_PORT", "3306")
-        try:
-            port = int(port_str)
-        except ValueError:
-            raise ValueError(f"DB_PORT must be an integer, got: {port_str!r}")
-        return {
-            "host": host,
-            "port": port,
-            "username": os.environ.get("DB_USERNAME", "root"),
-            "password": password,
-            "database": os.environ.get("DB_DATABASE", "app"),
-        }
+        """Resolve MySQL credentials from DB_* env vars (DB_HOST + DB_PASSWORD required)."""
+        return _db_credentials_from_env("mysql")
 
     def _fetch_credentials_from_sm(self, secret_name: Optional[str]) -> Dict[str, Any]:
         """Override to use get_database_credentials for normalized field names."""
@@ -470,29 +451,11 @@ class PostgreSQLClient(BaseClient, ServiceHealthMixin):
         return None
 
     def _resolve_credentials_from_env(self) -> Optional[Dict[str, Any]]:
-        """Resolve PostgreSQL credentials from environment variables.
-
-        Requires both DB_HOST and DB_PASSWORD to trigger.
-        """
-        host = os.environ.get("DB_HOST")
-        password = os.environ.get("DB_PASSWORD")
-        if not host or not password:
-            return None
-        port_str = os.environ.get("DB_PORT", "5432")
-        try:
-            port = int(port_str)
-        except ValueError:
-            raise ValueError(f"DB_PORT must be an integer, got: {port_str!r}")
-        return {
-            "host": host,
-            "port": port,
-            "username": os.environ.get("DB_USERNAME", "postgres"),
-            "password": password,
-            "database": os.environ.get("DB_DATABASE", "postgres"),
-        }
+        """Resolve PostgreSQL credentials from DB_* env vars (DB_HOST + DB_PASSWORD required)."""
+        return _db_credentials_from_env("postgresql")
 
     def _fetch_credentials_from_sm(self, secret_name: Optional[str]) -> Dict[str, Any]:
-        """Override with auth-specific credential handling."""
+        """Fetch from Secrets Manager, preferring the auth_* keys when requested and present."""
         from .secrets_helper import get_secret
 
         resolved_secret_name = self._resolve_secret_name(secret_name)
@@ -507,8 +470,7 @@ class PostgreSQLClient(BaseClient, ServiceHealthMixin):
                 "password": raw_creds.get("auth_password"),
                 "database": raw_creds.get("auth_database", "auth-service-db"),
             }
-        else:
-            return get_database_credentials(resolved_secret_name)
+        return _normalise_db_secret(raw_creds, "postgresql")
 
     @contextmanager
     def get_connection(self, database: Optional[str] = None):

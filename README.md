@@ -121,7 +121,7 @@ from nui_shared_utils import get_secret, get_slack_credentials
 api_keys = get_secret("my-service/api-keys")
 
 # Specialized getters with normalized field names
-slack_creds = get_slack_credentials()  # Uses configured secret name
+slack_creds = get_slack_credentials()  # SLACK_BOT_TOKEN if set, else the configured secret
 ```
 
 **[→ See full secrets management guide](docs/getting-started/configuration.md#aws-secrets-manager)**

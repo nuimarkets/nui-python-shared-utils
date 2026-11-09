@@ -194,6 +194,11 @@ Clients resolve credentials in this order (first match wins):
 2. **Environment variables** — per-client patterns, skips Secrets Manager
 3. **AWS Secrets Manager** — default behavior
 
+The `get_*_credentials` helpers in `secrets_helper.py` follow tiers 2 and 3 through the same
+per-service env resolver and secret normaliser the clients use. Elasticsearch host:
+`host` argument > `ES_HOST`/`ELASTICSEARCH_HOST` > `configure(es_host=...)` > secret `host` >
+`localhost:9200`.
+
 ### Environment Variables
 
 Runtime configuration:
