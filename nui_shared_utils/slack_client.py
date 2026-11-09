@@ -262,8 +262,9 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         return _slack_credentials_from_env()
 
     def _fetch_credentials_from_sm(self, secret_name: Optional[str]) -> Dict[str, Any]:
-        """Fetch from Secrets Manager and normalise to bot_token, webhook_url."""
-        return _normalise_slack_secret(super()._fetch_credentials_from_sm(secret_name))
+        """Fetch from Secrets Manager; normalise bot_token, webhook_url and keep any other keys."""
+        raw = super()._fetch_credentials_from_sm(secret_name)
+        return {**raw, **_normalise_slack_secret(raw)}
 
     def _create_service_client(self) -> WebClient:
         """Create Slack WebClient with credentials."""

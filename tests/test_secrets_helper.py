@@ -482,7 +482,20 @@ class TestHelperEnvBeforeSecretsManager:
         ):
             client = SlackClient(secret_name="sl")
 
-        assert client.credentials == helper == {"bot_token": "xoxb-legacy", "webhook_url": None}
+        assert helper == {"bot_token": "xoxb-legacy", "webhook_url": None}
+        assert client.credentials == {"token": "xoxb-legacy", **helper}
+
+    def test_slack_client_keeps_extra_secret_keys(self):
+        from nui_shared_utils.slack_client import SlackClient
+
+        secret = {"bot_token": "xoxb-1", "signing_secret": "s", "app_token": "xapp-1"}
+        with (
+            patch("nui_shared_utils.base_client.get_secret", return_value=dict(secret)),
+            patch("nui_shared_utils.slack_client.WebClient"),
+        ):
+            client = SlackClient(secret_name="sl")
+
+        assert client.credentials == {**secret, "webhook_url": None}
 
     def test_database_client_and_helper_agree_on_env(self, monkeypatch):
         from nui_shared_utils.db_client import DatabaseClient
@@ -507,4 +520,3 @@ class TestHelperEnvBeforeSecretsManager:
 
         assert helper["bot_token"] == "xoxb-legacy"
         web_client.assert_called_once_with(token="xoxb-legacy")
-

@@ -763,4 +763,3 @@ class TestPostgreSQLCredentialResolution:
         monkeypatch.setenv("DB_PORT", "not-a-port")
         with pytest.raises(ValueError, match="DB_PORT must be an integer"):
             PostgreSQLClient()
-

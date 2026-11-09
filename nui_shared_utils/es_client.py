@@ -58,8 +58,9 @@ class ElasticsearchClient(BaseClient, ServiceHealthMixin):
         return _es_credentials_from_env()
 
     def _fetch_credentials_from_sm(self, secret_name: Optional[str]) -> Dict[str, Any]:
-        """Fetch from Secrets Manager and normalise to host, username, password."""
-        return _normalise_es_secret(super()._fetch_credentials_from_sm(secret_name))
+        """Fetch from Secrets Manager; normalise host, username, password and keep any other keys."""
+        raw = super()._fetch_credentials_from_sm(secret_name)
+        return {**raw, **_normalise_es_secret(raw)}
 
     def _create_service_client(self) -> Elasticsearch:
         """Create Elasticsearch client with resolved configuration."""

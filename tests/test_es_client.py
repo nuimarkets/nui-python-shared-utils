@@ -698,3 +698,11 @@ class TestElasticsearchHostResolution:
         assert self._client_url(secret) == f"http://{secret_host}:9200"
         assert self._helper_host(secret) == f"{secret_host}:9200"
 
+    def test_client_credentials_normalised_and_extra_keys_kept(self):
+        with (
+            patch("nui_shared_utils.base_client.get_secret", return_value={"password": "pw", "api_key": "k"}),
+            patch("nui_shared_utils.es_client.Elasticsearch"),
+        ):
+            client = ElasticsearchClient(secret_name="es")
+
+        assert client.credentials == {"host": None, "username": "elastic", "password": "pw", "api_key": "k"}
