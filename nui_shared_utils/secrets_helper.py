@@ -190,9 +190,12 @@ def _slack_credentials_from_env() -> Optional[Dict[str, Any]]:
 
 
 def _normalise_slack_secret(creds: Dict[str, Any]) -> Dict[str, Any]:
-    """Map a Slack secret onto bot_token (or legacy token) and optional webhook_url."""
+    """Map a Slack secret onto bot_token (or legacy token) and optional webhook_url.
+
+    An empty or null ``bot_token`` falls back to ``token``.
+    """
     return {
-        "bot_token": creds.get("bot_token", creds.get("token")),
+        "bot_token": creds.get("bot_token") or creds.get("token"),
         "webhook_url": creds.get("webhook_url"),
     }
 

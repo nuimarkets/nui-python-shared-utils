@@ -480,3 +480,19 @@ class TestHelperEnvBeforeSecretsManager:
 
         assert DatabaseClient().credentials == secrets_helper.get_database_credentials()
 
+    @pytest.mark.parametrize("bot_token", [None, ""])
+    def test_slack_empty_bot_token_falls_back_to_legacy_token(self, bot_token):
+        from nui_shared_utils.slack_client import SlackClient
+
+        secret = {"bot_token": bot_token, "token": "xoxb-legacy"}
+        with patch("nui_shared_utils.secrets_helper.get_secret", return_value=dict(secret)):
+            helper = secrets_helper.get_slack_credentials("sl")
+        with (
+            patch("nui_shared_utils.base_client.get_secret", return_value=dict(secret)),
+            patch("nui_shared_utils.slack_client.WebClient") as web_client,
+        ):
+            SlackClient(secret_name="sl")
+
+        assert helper["bot_token"] == "xoxb-legacy"
+        web_client.assert_called_once_with(token="xoxb-legacy")
+
