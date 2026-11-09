@@ -663,3 +663,38 @@ class TestElasticsearchHostResolution:
         get_secret.assert_not_called()
         assert es.call_args[0][0][0] == "http://es-config:9200"
 
+    def test_configured_host_beats_secret_host(self):
+        from nui_shared_utils.config import Config
+
+        secret = {"host": "es-from-secret:9200", "password": "pw"}
+        with patch("nui_shared_utils.secrets_helper.get_config", return_value=Config(es_host="es-configured:9200")):
+            assert self._client_url(secret) == "http://es-configured:9200"
+            assert self._helper_host(secret) == "es-configured:9200"
+
+    def test_env_host_beats_configured_host(self, monkeypatch):
+        from nui_shared_utils.config import Config
+
+        monkeypatch.setenv("ES_HOST", "es-from-env:9200")
+        secret = {"host": "es-from-secret:9200", "password": "pw"}
+        with patch("nui_shared_utils.secrets_helper.get_config", return_value=Config(es_host="es-configured:9200")):
+            assert self._client_url(secret) == "http://es-from-env:9200"
+            assert self._helper_host(secret) == "es-from-env:9200"
+
+    def test_env_derived_config_host_does_not_beat_secret_host(self, monkeypatch):
+        from nui_shared_utils.config import Config
+
+        monkeypatch.setenv("ES_HOST", "es-env-at-startup:9200")
+        config = Config()  # picks ES_HOST up from the environment, not an explicit setting
+        monkeypatch.delenv("ES_HOST")
+        secret = {"host": "es-from-secret:9200", "password": "pw"}
+        with patch("nui_shared_utils.secrets_helper.get_config", return_value=config):
+            assert self._client_url(secret) == "http://es-from-secret:9200"
+            assert self._helper_host(secret) == "es-from-secret:9200"
+
+    @pytest.mark.parametrize("secret_host", ["httpd-es", "https-proxy.internal"])
+    def test_http_prefixed_bare_host_gets_default_port_on_both_paths(self, secret_host):
+        secret = {"host": secret_host, "password": "pw"}
+
+        assert self._client_url(secret) == f"http://{secret_host}:9200"
+        assert self._helper_host(secret) == f"{secret_host}:9200"
+

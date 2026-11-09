@@ -11,7 +11,7 @@ from elasticsearch.helpers import streaming_bulk as es_streaming_bulk
 
 from .base_client import BaseClient, ServiceHealthMixin
 from .utils import handle_client_errors
-from .secrets_helper import _es_credentials_from_env, _normalise_es_secret, _resolve_es_host
+from .secrets_helper import _es_credentials_from_env, _es_host_with_port, _normalise_es_secret, _resolve_es_host
 
 log = logging.getLogger(__name__)
 
@@ -63,19 +63,18 @@ class ElasticsearchClient(BaseClient, ServiceHealthMixin):
 
     def _create_service_client(self) -> Elasticsearch:
         """Create Elasticsearch client with resolved configuration."""
-        # Host precedence: constructor arg > ES_HOST/ELASTICSEARCH_HOST >
-        # credentials "host" (e.g. from the secret) > configured default.
+        # Host precedence: constructor arg > ES_HOST/ELASTICSEARCH_HOST > configure(es_host=...)
+        # > credentials "host" (e.g. from the secret) > default. Shared with get_elasticsearch_credentials.
         if self._host_override is not None:
             host = self._host_override
         else:
             host = _resolve_es_host(self.credentials.get("host"))
+        host = _es_host_with_port(host)
 
         parsed = urlparse(host)
         if parsed.scheme and parsed.netloc:  # Valid URL with scheme://netloc
             es_url = host
         else:
-            if ":" not in host:
-                host = f"{host}:9200"
             scheme = self.client_config.get("scheme", "http")
             es_url = f"{scheme}://{host}"
 

@@ -34,7 +34,9 @@ class Config:
             slack_credentials_secret: AWS secret name for Slack credentials
             aws_region: AWS region for secrets/services
         """
-        # Elasticsearch settings
+        # Elasticsearch settings. An es_host passed here outranks a host carried in a
+        # credentials secret; the env-derived and built-in values do not.
+        self._es_host_explicit = es_host is not None
         if es_host is not None:
             self.es_host = es_host
         else:

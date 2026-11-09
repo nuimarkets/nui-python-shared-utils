@@ -6,6 +6,7 @@ Shared across all AWS Lambda functions.
 import os
 import json
 import logging
+from urllib.parse import urlparse
 from typing import Any, Dict, Optional
 
 from .config import get_config
@@ -172,10 +173,30 @@ def _normalise_es_secret(creds: Dict[str, Any]) -> Dict[str, Any]:
 
 def _resolve_es_host(credentials_host: Optional[str] = None) -> str:
     """
-    Pick the Elasticsearch host: ES_HOST (or ELASTICSEARCH_HOST), then the host
-    carried by the resolved credentials, then the configured default.
+    Pick the Elasticsearch host: ES_HOST (or ELASTICSEARCH_HOST), then a host set
+    explicitly through configure(es_host=...) or Config(es_host=...), then the host
+    carried by the resolved credentials, then the configured default (localhost:9200).
     """
-    return os.environ.get("ES_HOST") or os.environ.get("ELASTICSEARCH_HOST") or credentials_host or get_config().es_host
+    env_host = os.environ.get("ES_HOST") or os.environ.get("ELASTICSEARCH_HOST")
+    if env_host:
+        return env_host
+    config = get_config()
+    if getattr(config, "_es_host_explicit", False) is True:
+        return config.es_host
+    return credentials_host or config.es_host
+
+
+def _es_host_with_port(host: str) -> str:
+    """
+    Return ``host`` unchanged when it is a URL (scheme://netloc) or already names a
+    port; otherwise append the default port ``:9200``.
+    """
+    parsed = urlparse(host)
+    if parsed.scheme and parsed.netloc:
+        return host
+    if ":" not in host:
+        return f"{host}:9200"
+    return host
 
 
 def _slack_credentials_from_env() -> Optional[Dict[str, Any]]:
@@ -236,9 +257,9 @@ def get_elasticsearch_credentials(secret_name: Optional[str] = None) -> Dict:
     1. Environment variables (ES_PASSWORD/ES_PASS + ES_USERNAME/ES_USER)
     2. AWS Secrets Manager
 
-    The host is ES_HOST (or ELASTICSEARCH_HOST), then the secret's ``host``
-    field, then the configured default, with ``:9200`` appended when no port
-    or scheme is given.
+    The host is ES_HOST (or ELASTICSEARCH_HOST), then a host set with
+    configure(es_host=...), then the secret's ``host`` field, then the default,
+    with ``:9200`` appended when no port is given and it is not a URL.
 
     Args:
         secret_name: Override default secret name for Secrets Manager lookup.
@@ -255,9 +276,7 @@ def get_elasticsearch_credentials(secret_name: Optional[str] = None) -> Dict:
             raise ValueError("No Elasticsearch secret name provided")
         creds = _normalise_es_secret(get_secret(secret))
 
-    host = _resolve_es_host(creds.get("host"))
-    if ":" not in host and not host.startswith("http"):
-        host = f"{host}:9200"
+    host = _es_host_with_port(_resolve_es_host(creds.get("host")))
 
     return {"host": host, "username": creds["username"], "password": creds["password"]}
 
