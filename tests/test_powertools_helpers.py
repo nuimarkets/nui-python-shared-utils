@@ -567,16 +567,26 @@ class TestOptionalImports:
             assert get_powertools_logger is not None
 
     def test_slack_client_not_available(self):
-        """Test graceful degradation when SlackClient not available"""
-        with patch("nui_shared_utils.powertools_helpers.SLACK_CLIENT_AVAILABLE", False):
-            from nui_shared_utils.powertools_helpers import powertools_handler
+        """Missing Slack imports leave the handler usable without creating a client."""
+        from nui_shared_utils import powertools_helpers
 
-            # Should not raise on decorator creation
-            @powertools_handler(service_name="test", slack_alert_channel="#test")
+        with (
+            patch("nui_shared_utils.slack_client.SlackClient") as mock_slack_client,
+            patch.object(powertools_helpers, "SlackClient", None),
+            patch.object(powertools_helpers, "SLACK_CLIENT_AVAILABLE", True),
+            patch.dict("sys.modules", {"nui_shared_utils.slack_client": None}),
+            patch.object(powertools_helpers, "get_powertools_logger") as mock_get_logger,
+        ):
+            mock_get_logger.return_value.inject_lambda_context.side_effect = lambda func: func
+
+            @powertools_helpers.powertools_handler(service_name="test", slack_alert_channel="#test")
             def handler(event, context):
                 return {"statusCode": 200}
 
-            assert handler is not None
+            assert handler({}, None) == {"statusCode": 200}
+            assert powertools_helpers.SLACK_CLIENT_AVAILABLE is False
+            assert powertools_helpers.SlackClient is None
+            mock_slack_client.assert_not_called()
 
     def test_coloredlogs_not_available(self, monkeypatch):
         """Test graceful degradation when coloredlogs not installed"""

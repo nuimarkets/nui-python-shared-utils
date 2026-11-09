@@ -11,7 +11,6 @@ import time
 import pymysql
 from nui_shared_utils.db_client import (
     DatabaseClient,
-    _clean_expired_connections,
     get_pool_stats,
     safe_close_connection,
 )
@@ -411,50 +410,44 @@ class TestBulkInsert:
 class TestConnectionRecycling:
     """Tests for connection recycling functionality."""
 
+    @pytest.mark.parametrize("expired_age", [3600, 3700], ids=["at-recycle-limit", "past-recycle-limit"])
+    @patch("nui_shared_utils.db_client.time.time", return_value=10000)
     @patch("nui_shared_utils.db_client._connection_pool", {})
     @patch("nui_shared_utils.db_client.safe_close_connection")
-    def test_clean_expired_connections_enabled(self, mock_safe_close):
-        """Test that connections are recycled when they exceed pool_recycle time."""
+    def test_clean_expired_connections_enabled(self, mock_safe_close, mock_time, expired_age):
+        """Recycle connections at or beyond the limit, retaining younger entries."""
         from nui_shared_utils.db_client import _connection_pool
 
+        client = DatabaseClient(credentials={"host": "db.example.com", "port": 3306}, pool_recycle=3600)
         pool_key = "test_pool"
-        current_time = time.time()
-
-        # Manually add an old connection to the pool
         old_conn = Mock()
         fresh_conn = Mock()
-
+        fresh_entry = {"connection": fresh_conn, "timestamp": mock_time.return_value - 1800}
         _connection_pool[pool_key] = [
-            {"connection": old_conn, "timestamp": current_time - 3700},  # Old (> 1 hour)
-            {"connection": fresh_conn, "timestamp": current_time - 1800},  # Fresh (30 min)
+            {"connection": old_conn, "timestamp": mock_time.return_value - expired_age},
+            fresh_entry,
         ]
 
-        # Clean expired connections with 1 hour recycle time
-        _clean_expired_connections(pool_key, 3600)
+        client._clean_expired_connections(pool_key)
 
-        # Verify old connection was safely closed and removed, fresh one remains
         mock_safe_close.assert_called_once_with(old_conn)
-        assert len(_connection_pool[pool_key]) == 1
-        assert _connection_pool[pool_key][0]["connection"] == fresh_conn
+        assert _connection_pool[pool_key] == [fresh_entry]
 
     @patch("nui_shared_utils.db_client._connection_pool", {})
     def test_clean_expired_connections_disabled(self):
-        """Test that recycling is disabled when pool_recycle is 0 or None."""
+        """A zero recycle interval leaves old connections in the pool."""
         from nui_shared_utils.db_client import _connection_pool
 
+        client = DatabaseClient(credentials={"host": "db.example.com", "port": 3306}, pool_recycle=0)
         pool_key = "test_pool"
-        current_time = time.time()
-
-        # Manually add an old connection to the pool
         old_conn = Mock()
-        _connection_pool[pool_key] = [{"connection": old_conn, "timestamp": current_time - 7200}]  # 2 hours old
+        old_entry = {"connection": old_conn, "timestamp": time.time() - 7200}
+        _connection_pool[pool_key] = [old_entry]
 
-        # Clean expired connections with recycling disabled
-        _clean_expired_connections(pool_key, 0)
+        client._clean_expired_connections(pool_key)
 
-        # Verify connection was NOT closed or removed
         old_conn.close.assert_not_called()
-        assert len(_connection_pool[pool_key]) == 1
+        assert _connection_pool[pool_key] == [old_entry]
 
     @patch("nui_shared_utils.db_client._connection_pool", {})
     def test_pool_stats_with_timestamps(self):

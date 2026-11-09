@@ -27,47 +27,6 @@ log = logging.getLogger(__name__)
 _connection_pool = {}
 
 
-def _clean_expired_connections(pool_key: str, pool_recycle: int) -> None:
-    """
-    Clean expired connections from the pool.
-
-    Args:
-        pool_key: Pool identifier
-        pool_recycle: Maximum connection age in seconds (0 disables recycling)
-    """
-    if not pool_recycle or pool_recycle <= 0:
-        return
-    
-    if pool_key not in _connection_pool:
-        return
-    
-    current_time = time.time()
-    pool_entries = _connection_pool[pool_key]
-    
-    # Find expired connections
-    expired_connections = []
-    fresh_connections = []
-    
-    for entry in pool_entries:
-        age = current_time - entry["timestamp"]
-        if age > pool_recycle:
-            expired_connections.append(entry["connection"])
-        else:
-            fresh_connections.append(entry)
-    
-    # Close expired connections
-    for conn in expired_connections:
-        safe_close_connection(conn)
-    
-    # Update pool with only fresh connections
-    _connection_pool[pool_key] = fresh_connections
-    
-    if expired_connections:
-        log.debug(
-            f"Cleaned {len(expired_connections)} expired connections from pool {pool_key}"
-        )
-
-
 def get_pool_stats() -> Dict[str, Any]:
     """
     Get current connection pool statistics.
