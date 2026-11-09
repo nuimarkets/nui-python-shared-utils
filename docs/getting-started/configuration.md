@@ -18,6 +18,15 @@ All clients (Slack, Elasticsearch, Database) resolve credentials in this order:
 2. **Credential environment variables** - Per-client env vars, skips Secrets Manager
 3. **AWS Secrets Manager** - Default behavior (unchanged)
 
+The helper functions `get_elasticsearch_credentials`, `get_database_credentials` and
+`get_slack_credentials` follow the same order from step 2: when the client's env vars are set
+they return those values without calling Secrets Manager. `get_database_credentials` applies the
+MySQL defaults; `PostgreSQLClient` applies the PostgreSQL ones on both the env and the secret path.
+
+The Elasticsearch host resolves as: the client's `host` argument, then `ES_HOST` (or
+`ELASTICSEARCH_HOST`), then the secret's `host` field, then the configured default
+(`localhost:9200`). The client and `get_elasticsearch_credentials` use the same order.
+
 ## Environment Variables
 
 ### Core Configuration
@@ -163,7 +172,7 @@ The package expects AWS secrets in specific JSON formats:
 
 **Optional Fields:**
 
-- `host` - Can override ES_HOST if provided
+- `host` - Used when `ES_HOST` and `ELASTICSEARCH_HOST` are unset; overrides the configured default
 - `username` - Defaults to "elastic" if not provided
 
 #### Database Credentials

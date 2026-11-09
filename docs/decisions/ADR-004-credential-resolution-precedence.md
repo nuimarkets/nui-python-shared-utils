@@ -24,6 +24,9 @@ The function-based helper historically undercut this. `get_elasticsearch_credent
 (`secrets_helper.py`) called Secrets Manager first even when `ES_PASSWORD` was set, so CLI and
 local-dev paths paid an avoidable AWS call. Commit `0d3f8e8` (PR #23) added the env-var check
 ahead of the store lookup, aligning the helper with the precedence the clients already enforced.
+The database and Slack helpers kept calling the store first until they were routed through the
+clients' own env resolvers, and the Elasticsearch client ignored a secret's `host` field that the
+helper honoured.
 
 ## Decision
 
@@ -42,9 +45,16 @@ in `base_client.py`:
 
 A later tier fires only when every earlier tier is absent. An AWS call happens only when neither
 an explicit dict nor env vars resolve, so local-dev, CLI, and test paths that supply explicit or
-environment credentials make **zero** Secrets Manager calls. The direct function helper mirrors
-the tail of this ladder for callers that bypass the client classes:
-`get_elasticsearch_credentials` checks env vars, then the store.
+environment credentials make **zero** Secrets Manager calls. The direct function helpers mirror
+the tail of this ladder for callers that bypass the client classes: `get_elasticsearch_credentials`,
+`get_database_credentials` and `get_slack_credentials` each check the same env vars as their
+client, then the store. Client hook and helper call the same per-service functions in
+`secrets_helper.py` (an env resolver and a secret normaliser per service, with per-engine defaults
+for MySQL and PostgreSQL), so the two paths cannot drift apart.
+
+The Elasticsearch host follows its own order on both paths: the client's `host` argument, then
+`ES_HOST` (or `ELASTICSEARCH_HOST`), then the `host` field of the resolved credentials (the
+secret's, or an explicit dict's), then the configured default.
 
 ## Alternatives considered
 

@@ -10,6 +10,22 @@ that contained them.
 
 ### Changed
 
+- `get_database_credentials` and `get_slack_credentials` check environment variables before
+  Secrets Manager, matching `DatabaseClient`, `SlackClient` and `get_elasticsearch_credentials`.
+  With `DB_HOST` and `DB_PASSWORD` set, or `SLACK_BOT_TOKEN` set, they return the env values
+  (MySQL defaults for unset `DB_PORT`, `DB_USERNAME`, `DB_DATABASE`) and make no AWS call, and
+  they no longer raise for a missing secret name in that case. Callers that set these env vars
+  but expect the secret's values must unset them.
+- `ElasticsearchClient` reads the `host` field of its resolved credentials. Host order on the
+  client and `get_elasticsearch_credentials` is: `host` argument (client only), `ES_HOST` or
+  `ELASTICSEARCH_HOST`, the credentials' `host`, then the configured default. A client built
+  from a secret that carries a host with no `ES_HOST` set connects to that host instead of the
+  configured default.
+- `ElasticsearchClient` and `SlackClient` normalise credentials fetched from Secrets Manager to
+  the same shape the helpers return (`host`/`username`/`password`, and `bot_token`/`webhook_url`
+  with a legacy `token` field mapped to `bot_token`). `SlackClient.credentials` from env vars
+  always carries a `webhook_url` key, `None` when `SLACK_WEBHOOK_URL` is unset.
+
 - **BREAKING**: require Python 3.10 or newer in both the main package and the legacy
   redirect package. Python 3.9 is no longer supported or included in CI test matrices.
 - Powertools docstring and guide examples use generic service and namespace names
@@ -18,6 +34,8 @@ that contained them.
 
 ### Fixed
 
+- `PostgreSQLClient` given a secret with no `port` or `database` fills PostgreSQL defaults
+  (`5432`, `postgres`) instead of the MySQL ones (`3306`, `app`).
 - Use canonical IANA names `America/New_York` and `America/Los_Angeles` for US timezone
   constants and option labels, so importing timezone utilities and Slack formatting works
   on systems without legacy timezone links.

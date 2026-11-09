@@ -15,13 +15,13 @@ class TestElasticsearchClient:
     """Tests for ElasticsearchClient class."""
 
     @patch.dict("os.environ", {}, clear=True)
-    @patch("nui_shared_utils.es_client.resolve_config_value")
+    @patch("nui_shared_utils.secrets_helper.get_config")
     @patch("nui_shared_utils.base_client.get_secret")
     @patch("nui_shared_utils.es_client.Elasticsearch")
-    def test_init_default_values(self, mock_es, mock_get_secret, mock_resolve_config_value):
+    def test_init_default_values(self, mock_es, mock_get_secret, mock_get_config):
         """Test initialization with default values."""
-        # Mock resolve_config_value to return localhost for host resolution
-        mock_resolve_config_value.return_value = "localhost:9200"
+        # Pin the configured default host; the shared config singleton may carry another
+        mock_get_config.return_value = Mock(es_host="localhost:9200")
         mock_get_secret.return_value = {"username": "elastic", "password": "test_password"}
 
         client = ElasticsearchClient()
@@ -587,11 +587,79 @@ class TestElasticsearchHostResolution:
         secret = {"host": "es-from-secret:9200", "username": "elastic", "password": "pw"}
         with patch("nui_shared_utils.secrets_helper.get_secret", return_value=dict(secret)):
             helper_host = secrets_helper.get_elasticsearch_credentials("es")["host"]
-        with patch("nui_shared_utils.base_client.get_secret", return_value=dict(secret)), patch(
-            "nui_shared_utils.es_client.Elasticsearch"
-        ) as es:
+        with (
+            patch("nui_shared_utils.base_client.get_secret", return_value=dict(secret)),
+            patch("nui_shared_utils.es_client.Elasticsearch") as es,
+        ):
             ElasticsearchClient(secret_name="es")
             client_url = es.call_args[0][0][0]
 
         assert helper_host == "es-from-secret:9200"
         assert client_url == "http://es-from-secret:9200"
+
+    @staticmethod
+    def _client_url(secret, **kwargs):
+        with (
+            patch("nui_shared_utils.base_client.get_secret", return_value=dict(secret)),
+            patch("nui_shared_utils.es_client.Elasticsearch") as es,
+        ):
+            ElasticsearchClient(secret_name="es", **kwargs)
+        return es.call_args[0][0][0]
+
+    @staticmethod
+    def _helper_host(secret):
+        from nui_shared_utils import secrets_helper
+
+        with patch("nui_shared_utils.secrets_helper.get_secret", return_value=dict(secret)):
+            return secrets_helper.get_elasticsearch_credentials("es")["host"]
+
+    @pytest.mark.parametrize("env_var", ["ES_HOST", "ELASTICSEARCH_HOST"])
+    def test_env_host_beats_secret_host(self, monkeypatch, env_var):
+        monkeypatch.setenv(env_var, "es-from-env:9200")
+        secret = {"host": "es-from-secret:9200", "password": "pw"}
+
+        assert self._client_url(secret) == "http://es-from-env:9200"
+        assert self._helper_host(secret) == "es-from-env:9200"
+
+    def test_host_argument_beats_env_and_secret(self, monkeypatch):
+        monkeypatch.setenv("ES_HOST", "es-from-env:9200")
+        secret = {"host": "es-from-secret:9200", "password": "pw"}
+
+        assert self._client_url(secret, host="es-from-arg:9201") == "http://es-from-arg:9201"
+
+    def test_secret_without_host_uses_configured_default(self):
+        secret = {"password": "pw"}
+        with patch("nui_shared_utils.secrets_helper.get_config", return_value=Mock(es_host="es-config:9200")):
+            assert self._client_url(secret) == "http://es-config:9200"
+            assert self._helper_host(secret) == "es-config:9200"
+
+    def test_secret_host_with_scheme_is_used_as_is(self):
+        secret = {"host": "https://es.example.com:443", "password": "pw"}
+
+        assert self._client_url(secret) == "https://es.example.com:443"
+        assert self._helper_host(secret) == "https://es.example.com:443"
+
+    def test_secret_host_without_port_gets_default_port(self):
+        secret = {"host": "es-from-secret", "password": "pw"}
+
+        assert self._client_url(secret) == "http://es-from-secret:9200"
+        assert self._helper_host(secret) == "es-from-secret:9200"
+
+    def test_explicit_credentials_host_is_used(self):
+        with patch("nui_shared_utils.es_client.Elasticsearch") as es:
+            ElasticsearchClient(credentials={"host": "es-explicit:9200", "password": "pw"})
+
+        assert es.call_args[0][0][0] == "http://es-explicit:9200"
+
+    def test_env_credentials_never_read_secret_host(self, monkeypatch):
+        monkeypatch.setenv("ES_PASSWORD", "env-pw")
+        with (
+            patch("nui_shared_utils.base_client.get_secret") as get_secret,
+            patch("nui_shared_utils.secrets_helper.get_config", return_value=Mock(es_host="es-config:9200")),
+            patch("nui_shared_utils.es_client.Elasticsearch") as es,
+        ):
+            ElasticsearchClient()
+
+        get_secret.assert_not_called()
+        assert es.call_args[0][0][0] == "http://es-config:9200"
+

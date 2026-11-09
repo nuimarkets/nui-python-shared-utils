@@ -420,3 +420,63 @@ class TestHelperEnvBeforeSecretsManager:
 
         get_secret.assert_not_called()
         assert result == {"bot_token": "xoxb-env", "webhook_url": None}
+
+    def test_database_helper_env_needs_no_secret_name(self, monkeypatch):
+        monkeypatch.setenv("DB_HOST", "h")
+        monkeypatch.setenv("DB_PASSWORD", "p")
+        monkeypatch.setenv("DB_PORT", "3307")
+        monkeypatch.setenv("DB_USERNAME", "app-user")
+        monkeypatch.setenv("DB_DATABASE", "reports")
+        monkeypatch.delenv("DB_CREDENTIALS_SECRET", raising=False)
+        with patch("nui_shared_utils.secrets_helper.get_config", return_value=Mock(db_credentials_secret=None)):
+            result = secrets_helper.get_database_credentials()
+
+        assert result == {"host": "h", "port": 3307, "username": "app-user", "password": "p", "database": "reports"}
+
+    def test_database_helper_host_without_password_uses_secrets_manager(self, monkeypatch):
+        monkeypatch.setenv("DB_HOST", "h")
+        with patch("nui_shared_utils.secrets_helper.get_secret", return_value={"host": "sm", "password": "x"}) as gs:
+            result = secrets_helper.get_database_credentials("db")
+
+        gs.assert_called_once_with("db")
+        assert result["host"] == "sm"
+        assert result["port"] == 3306
+
+    def test_database_helper_invalid_port_env_raises(self, monkeypatch):
+        monkeypatch.setenv("DB_HOST", "h")
+        monkeypatch.setenv("DB_PASSWORD", "p")
+        monkeypatch.setenv("DB_PORT", "abc")
+        with pytest.raises(ValueError, match="DB_PORT must be an integer"):
+            secrets_helper.get_database_credentials()
+
+    def test_slack_helper_env_includes_webhook(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-env")
+        monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.example.com/x")
+        monkeypatch.delenv("SLACK_CREDENTIALS_SECRET", raising=False)
+        with patch("nui_shared_utils.secrets_helper.get_config", return_value=Mock(slack_credentials_secret=None)):
+            result = secrets_helper.get_slack_credentials()
+
+        assert result == {"bot_token": "xoxb-env", "webhook_url": "https://hooks.example.com/x"}
+
+    def test_slack_client_and_helper_agree_on_secret_shape(self):
+        from nui_shared_utils.slack_client import SlackClient
+
+        secret = {"token": "xoxb-legacy"}
+        with patch("nui_shared_utils.secrets_helper.get_secret", return_value=dict(secret)):
+            helper = secrets_helper.get_slack_credentials("sl")
+        with (
+            patch("nui_shared_utils.base_client.get_secret", return_value=dict(secret)),
+            patch("nui_shared_utils.slack_client.WebClient"),
+        ):
+            client = SlackClient(secret_name="sl")
+
+        assert client.credentials == helper == {"bot_token": "xoxb-legacy", "webhook_url": None}
+
+    def test_database_client_and_helper_agree_on_env(self, monkeypatch):
+        from nui_shared_utils.db_client import DatabaseClient
+
+        monkeypatch.setenv("DB_HOST", "h")
+        monkeypatch.setenv("DB_PASSWORD", "p")
+
+        assert DatabaseClient().credentials == secrets_helper.get_database_credentials()
+

@@ -19,6 +19,7 @@ except ImportError:
     YAML_AVAILABLE = False
 
 from .base_client import BaseClient, ServiceHealthMixin
+from .secrets_helper import _normalise_slack_secret, _slack_credentials_from_env
 from .utils import create_aws_client, handle_client_errors
 from .lambda_helpers import get_lambda_environment_info
 
@@ -258,14 +259,11 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         Checks for SLACK_BOT_TOKEN (required to trigger).
         Optionally picks up SLACK_WEBHOOK_URL.
         """
-        bot_token = os.environ.get("SLACK_BOT_TOKEN")
-        if not bot_token:
-            return None
-        creds: Dict[str, Any] = {"bot_token": bot_token}
-        webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
-        if webhook_url:
-            creds["webhook_url"] = webhook_url
-        return creds
+        return _slack_credentials_from_env()
+
+    def _fetch_credentials_from_sm(self, secret_name: Optional[str]) -> Dict[str, Any]:
+        """Fetch from Secrets Manager and normalise to bot_token, webhook_url."""
+        return _normalise_slack_secret(super()._fetch_credentials_from_sm(secret_name))
 
     def _create_service_client(self) -> WebClient:
         """Create Slack WebClient with credentials."""
