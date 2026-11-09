@@ -580,6 +580,9 @@ class TestElasticsearchHostResolution:
     def _clean_es_env(self, monkeypatch):
         for name in ["ES_HOST", "ELASTICSEARCH_HOST", "ES_PASSWORD", "ES_PASS", "ES_USERNAME", "ES_USER"]:
             monkeypatch.delenv(name, raising=False)
+        # A configure(es_host=...) left by another test outranks the secret's host; start from a
+        # fresh, non-explicit config built from the cleaned env.
+        monkeypatch.setattr("nui_shared_utils.config._default_config", None)
 
     def test_client_and_helper_agree_on_host_from_secret(self):
         from nui_shared_utils import secrets_helper

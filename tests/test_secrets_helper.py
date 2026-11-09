@@ -520,3 +520,15 @@ class TestHelperEnvBeforeSecretsManager:
 
         assert helper["bot_token"] == "xoxb-legacy"
         web_client.assert_called_once_with(token="xoxb-legacy")
+
+    def test_helpers_ignore_secret_name_when_env_credentials_set(self, monkeypatch):
+        monkeypatch.setenv("DB_HOST", "env-db")
+        monkeypatch.setenv("DB_PASSWORD", "p")
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-env")
+        with patch("nui_shared_utils.secrets_helper.get_secret") as get_secret:
+            db = secrets_helper.get_database_credentials("other-db")
+            slack = secrets_helper.get_slack_credentials("other-workspace")
+
+        get_secret.assert_not_called()
+        assert db["host"] == "env-db"
+        assert slack["bot_token"] == "xoxb-env"
