@@ -147,6 +147,12 @@ class TestGetSecret:
 class TestGetDatabaseCredentials:
     """Tests for get_database_credentials function."""
 
+    @pytest.fixture(autouse=True)
+    def _clear_credential_env(self, monkeypatch):
+        """The helper reads these before Secrets Manager; clear them so the SM path runs."""
+        for name in ["DB_HOST", "DB_PASSWORD", "DB_PORT", "DB_USERNAME", "DB_DATABASE"]:
+            monkeypatch.delenv(name, raising=False)
+
     def test_get_database_credentials_success(self, mock_secrets_manager):
         """Test successful database credentials retrieval."""
         result = secrets_helper.get_database_credentials("db-secret")
@@ -290,6 +296,12 @@ class TestGetElasticsearchCredentials:
 
 class TestGetSlackCredentials:
     """Tests for get_slack_credentials function."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_credential_env(self, monkeypatch):
+        """The helper reads these before Secrets Manager; clear them so the SM path runs."""
+        for name in ["SLACK_BOT_TOKEN", "SLACK_WEBHOOK_URL"]:
+            monkeypatch.delenv(name, raising=False)
 
     def test_get_slack_credentials_success(self, mock_secrets_manager):
         """Test successful Slack credentials retrieval."""
