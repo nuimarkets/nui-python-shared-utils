@@ -257,6 +257,18 @@ def test_adapter_cannot_undo_runner_or_container_isolation(tmp_path, extra):
     assert code_of(Adapter, path) == "ADAPTER_CONFIG"
 
 
+@pytest.mark.parametrize("error", [FileNotFoundError("serverless"), subprocess.CalledProcessError(128, "git")])
+def test_main_codes_os_and_subprocess_failures(tmp_path, monkeypatch, capsys, error):
+    def boom(*args):
+        raise error
+
+    monkeypatch.setattr(cli, "verify", boom)
+    path = tmp_path / "lambda-validation.toml"
+    path.write_text(ADAPTER)
+    assert cli.main(["verify", "--config", str(path), "--output", str(tmp_path / "out")]) == 1
+    assert capsys.readouterr().err.startswith(f"BUILD: {type(error).__name__}")
+
+
 def test_prepare_stays_inside_the_build_tree(tmp_path):
     root = tmp_path / "checkout"
     (root / "node_modules").mkdir(parents=True)
@@ -270,6 +282,10 @@ def test_prepare_stays_inside_the_build_tree(tmp_path):
     tree2.mkdir()
     assert code_of(build.prepare, tree2, root, [], {"../escaped.yml": "x"}) == "ADAPTER_CONFIG"
     assert not (tmp_path / "escaped.yml").exists()
+    tree3 = tmp_path / "tree3"
+    tree3.mkdir()
+    missing = {"file": "missing.yml", "old": "a", "new": "b", "count": 1}
+    assert code_of(build.prepare, tree3, root, [missing], {}) == "BUILD"
 
 
 SHA = "0123456789abcdef0123456789abcdef01234567"

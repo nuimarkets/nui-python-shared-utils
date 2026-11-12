@@ -208,6 +208,7 @@ def test_pin_parser_accepts_compiled_lock(tmp_path):
     roots = tmp_path / "roots.txt"
     roots.write_text("-r other.txt\n")
     assert code_of(read_roots, roots) == "PIN_FORMAT"
+    assert code_of(read_pins, tmp_path / "missing.txt") == "ADAPTER_CONFIG"
 
 
 def test_extract_proves_every_member(tmp_path, good_zip):
@@ -517,6 +518,23 @@ def test_version_substitution_must_touch_metadata_and_module(tmp_path, adapter):
     assert code_of(negatives._substitute, source, tmp_path / "m.zip", "botocore-1.44.1.dist-info/METADATA") == (
         "NEGATIVE_INEFFECTIVE"
     )
+    # A double-quoted module version is substituted too, so the mutant stays coherent.
+    members["botocore/__init__.py"] = b'__version__ = "1.44.1"\n'
+    source = write_zip(tmp_path / "double.zip", members)
+    negatives._substitute(source, tmp_path / "d.zip", "botocore-1.44.1.dist-info/METADATA")
+    with zipfile.ZipFile(tmp_path / "d.zip") as mutant:
+        assert mutant.read("botocore/__init__.py") == b'__version__ = "1.44.2"\n'
+
+
+def test_negatives_require_a_passing_base_and_named_test_only_roots(tmp_path, repo, adapter):
+    leaky = mutate(tmp_path, {"config/env-dev.yml": b"x"})
+    assert code_of(negatives.run, leaky, adapter, tmp_path / "n1") == "SECRET_FILE"
+    (repo / "requirements-test.txt").write_text(PINS_TEST)
+    (repo / "lambda-validation.toml").write_text(
+        ADAPTER + 'test_lock = "requirements-test.txt"\n[dependencies.test_only]\npytest = []\n'
+    )
+    good = write_zip(tmp_path / "good.zip", base_members())
+    assert code_of(negatives.run, good, Adapter(repo / "lambda-validation.toml"), tmp_path / "n2") == "ADAPTER_CONFIG"
 
 
 def test_extraction_write_failure_is_coded(tmp_path, good_zip):

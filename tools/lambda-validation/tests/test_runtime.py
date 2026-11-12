@@ -54,7 +54,7 @@ def run_host(root, body):
         print("OK")
         """
     )
-    result = subprocess.run([sys.executable, "-I", "-c", script], capture_output=True, text=True)
+    result = subprocess.run([sys.executable, "-I", "-B", "-c", script], capture_output=True, text=True)
     return result.stdout + result.stderr
 
 
@@ -263,6 +263,8 @@ def test_check_native_imports_from_the_artifact_with_this_abi(tmp_path, image):
         return result.stdout + result.stderr
 
     assert "OK" in check("vendored._csv")
+    # importlib.metadata has already loaded the image's own _csv: imported from outside the artifact.
+    assert "CODE NATIVE_EXPECTED" in check("_csv")
     assert "CODE NATIVE_EXPECTED" in check("boto3")  # not a shared object
     (root / "vendored" / name).rename(root / "vendored" / "_csv.so")
     assert "CODE NATIVE_ABI" in check("vendored._csv")  # loads, but carries no cpython-312 or abi3 tag
@@ -308,7 +310,7 @@ def test_tool_metadata_beside_the_mount_or_importable(tmp_path):
                 print("OK")
             """
         )
-        result = subprocess.run([sys.executable, "-I", "-S", "-c", script], capture_output=True, text=True)
+        result = subprocess.run([sys.executable, "-I", "-B", "-S", "-c", script], capture_output=True, text=True)
         return result.stdout + result.stderr
 
     assert "OK" in isolated(root)
@@ -361,6 +363,9 @@ PRERELEASE_TABLE = [
     ("x~=1.1rc1", "1.1rc2", True),
     ("x==1.1.*", "1.1.0rc1", False),
     ("x!=1.0rc1", "1.0rc2", False),
+    ("x<=2.0rc1", "1.5rc1", True),
+    ("x===1.0rc1", "1.0rc1", True),
+    ("x", "1.0rc1", False),
 ]
 
 TABLE_SCRIPT = """
@@ -385,7 +390,7 @@ def test_prerelease_rule_is_the_same_on_the_host_and_in_both_images(tmp_path, im
     script = tmp_path / "table.py"
     script.write_text(TABLE_SCRIPT)
     result = subprocess.run(
-        [sys.executable, "-I", str(script), str(PACKAGE.parent)], input=rows, capture_output=True, text=True
+        [sys.executable, "-I", "-B", str(script), str(PACKAGE.parent)], input=rows, capture_output=True, text=True
     )
     assert result.stdout.split() == expected, result.stderr
     for name in (IMAGE, "public.ecr.aws/lambda/python:3.11"):
@@ -395,3 +400,9 @@ def test_prerelease_rule_is_the_same_on_the_host_and_in_both_images(tmp_path, im
         command[2:2] = ["--interactive"]  # docker run -i: the rows arrive on stdin
         result = subprocess.run(command, input=rows, capture_output=True, text=True)
         assert result.stdout.split() == expected, (name, result.stdout, result.stderr)
+
+
+def test_declared_library_missing(tmp_path):
+    root = fake_root(tmp_path / "task")
+    out = run_host(root, "runtime.check_native([], plain_libraries=['vendor/missing.so'], root=root)")
+    assert "CODE NATIVE_EXPECTED" in out, out

@@ -192,3 +192,20 @@ def test_relative_interpreter_resolves_from_the_callers_directory(project, tmp_p
     with pytest.raises(ValidationError) as caught:
         offline.run(tmp_path / "no-python", project, ["tests"])
     assert caught.value.code == "OFFLINE_GUARD"
+
+
+# The isolation contract, written out so that deleting or loosening a key in the module fails here.
+EXPECTED_BASE_ENV = {
+    "LANG": "C.UTF-8",
+    "AWS_EC2_METADATA_DISABLED": "true",
+    "AWS_XRAY_SDK_ENABLED": "false",
+    "AWS_CONFIG_FILE": "/dev/null",
+    "AWS_SHARED_CREDENTIALS_FILE": "/dev/null",
+    "BOTO_CONFIG": "/dev/null",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+}
+
+
+def test_base_env_is_the_isolation_contract():
+    assert offline.BASE_ENV == EXPECTED_BASE_ENV
