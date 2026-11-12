@@ -348,3 +348,50 @@ def test_inventory_rejects_a_prerelease_in_a_range(tmp_path):
         metadata("boto3", "1.44.1", ["botocore<1.45.0,>=1.44.1", "s3transfer==0.19.4rc1"])
     )
     assert "OK" in run_host(root, "runtime.check_inventory(None, root=root)")
+
+
+# (requirement, installed version, satisfied). The host and every image must agree on each row.
+PRERELEASE_TABLE = [
+    ("botocore<2.0a.0,>=1.37.4", "1.44.1", True),
+    ("botocore<2.0a.0,>=1.37.4", "1.44.1rc1", False),
+    ("x>=1,<2", "1.1rc1", False),
+    ("x==1.1rc1", "1.1rc1", True),
+    ("x>=2.0b1", "2.0b2", True),
+    ("x>2.0b1", "2.0b2", False),
+    ("x~=1.1rc1", "1.1rc2", True),
+    ("x==1.1.*", "1.1.0rc1", False),
+    ("x!=1.0rc1", "1.0rc2", False),
+]
+
+TABLE_SCRIPT = """
+import sys
+sys.path.insert(0, sys.argv[1])
+from pip._vendor.packaging.requirements import Requirement
+from nui_lambda_validation import runtime
+for line in sys.stdin.read().splitlines():
+    raw, version = line.split("|")
+    print(runtime._satisfies(Requirement(raw).specifier, version))
+"""
+
+
+def test_prerelease_rule_is_the_same_on_the_host_and_in_both_images(tmp_path, image):
+    from packaging.requirements import Requirement
+
+    from nui_lambda_validation import metadata as host
+
+    expected = [str(ok) for _, _, ok in PRERELEASE_TABLE]
+    assert [str(host._contains(Requirement(r).specifier, v)) for r, v, _ in PRERELEASE_TABLE] == expected
+    rows = "\n".join(f"{r}|{v}" for r, v, _ in PRERELEASE_TABLE)
+    script = tmp_path / "table.py"
+    script.write_text(TABLE_SCRIPT)
+    result = subprocess.run(
+        [sys.executable, "-I", str(script), str(PACKAGE.parent)], input=rows, capture_output=True, text=True
+    )
+    assert result.stdout.split() == expected, result.stderr
+    for name in (IMAGE, "public.ecr.aws/lambda/python:3.11"):
+        command = container.argv(
+            name, fake_root(tmp_path / name.rsplit(":", 1)[1]), "x86_64", script=script, args=(container.TOOL_MOUNT,)
+        )
+        command[2:2] = ["--interactive"]  # docker run -i: the rows arrive on stdin
+        result = subprocess.run(command, input=rows, capture_output=True, text=True)
+        assert result.stdout.split() == expected, (name, result.stdout, result.stderr)

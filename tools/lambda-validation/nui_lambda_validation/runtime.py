@@ -34,9 +34,28 @@ def _requirement(raw):
     return Requirement(raw)
 
 
+PRERELEASE_OPT_IN = ("==", "===", "~=", ">=", "<=")
+
+
+def names_prerelease(specifier):
+    """The host's rule (``metadata.names_prerelease``), over the image's vendored packaging."""
+    from pip._vendor.packaging.version import InvalidVersion, Version
+
+    for item in specifier:
+        if item.operator not in PRERELEASE_OPT_IN:
+            continue
+        text = item.version[:-2] if item.version.endswith(".*") else item.version
+        try:
+            if Version(text).is_prerelease:
+                return True
+        except InvalidVersion:
+            continue
+    return False
+
+
 def _satisfies(specifier, version):
-    """The host's rule (``metadata._contains``): a prerelease only where the specifier names one."""
-    return specifier.contains(version, prereleases=bool(specifier.prereleases))
+    """A prerelease satisfies a specifier only when the specifier names one, as on the host."""
+    return specifier.contains(version, prereleases=names_prerelease(specifier))
 
 
 def _normalize(name):

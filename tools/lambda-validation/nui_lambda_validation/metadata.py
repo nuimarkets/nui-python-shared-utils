@@ -67,13 +67,31 @@ def _requirement(raw, where):
         fail("METADATA_INVALID", f"{where}: {raw}: {error}")
 
 
+# Operators whose own prerelease version opts a requirement in to prereleases.
+PRERELEASE_OPT_IN = ("==", "===", "~=", ">=", "<=")
+
+
+def names_prerelease(specifier):
+    """True when an inclusive specifier names a prerelease (``==1.1rc1``, ``>=2.0b1``). An
+    exclusive bound such as ``<2.0a0`` does not opt in. Decided here, not by
+    ``SpecifierSet.prereleases``, whose answer for exclusive bounds changed between packaging
+    releases; ``runtime.names_prerelease`` is the same rule over the image's vendored copy."""
+    for item in specifier:
+        if item.operator not in PRERELEASE_OPT_IN:
+            continue
+        text = item.version[:-2] if item.version.endswith(".*") else item.version
+        try:
+            if Version(text).is_prerelease:
+                return True
+        except InvalidVersion:
+            continue
+    return False
+
+
 def _contains(specifier, version):
-    """As the source checks' ``in`` was: a prerelease satisfies a specifier only when the
-    specifier itself names a prerelease (``==1.1rc1``, ``>=2.0b1``), never a plain range.
-    Spelled out, because packaging's default differs between the host's pinned copy and
-    the image's vendored one."""
+    """A prerelease satisfies a specifier only when the specifier names one, never a plain range."""
     spec = SpecifierSet(str(specifier))
-    return spec.contains(Version(version), prereleases=bool(spec.prereleases))
+    return spec.contains(Version(version), prereleases=names_prerelease(spec))
 
 
 def _dist_name(directory):
