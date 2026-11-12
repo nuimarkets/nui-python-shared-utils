@@ -65,6 +65,15 @@ The `slack_setup/` submodule provides automated Slack workspace configuration:
 - **CLI Tool** - `slack-channel-setup` command for automation
 - **Generic Design** - Adaptable for any Slack workspace, not NUI-specific
 
+### Build-time tools (`tools/`)
+
+`tools/lambda-validation/` is a separate distribution, `nui-lambda-validation`, with its own
+`pyproject.toml`, tests and workflow (`.github/workflows/lambda-validation.yml`). It must not
+import or depend on `nui_shared_utils`, and `MANIFEST.in` prunes `tools/` so it never ships in
+this package. The root `pytest` run does not collect its tests; run them from the tool
+directory as its README describes. Consumers pin it by full commit SHA, so a change there is a
+new release for every repository that bumps its pin.
+
 ## Design Principles
 
 ### Keeping the Package Generic

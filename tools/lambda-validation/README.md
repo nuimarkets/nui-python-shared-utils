@@ -141,6 +141,18 @@ is not on the application's path. It is not an OS-level sandbox: a subprocess a 
 starts inherits the cleared environment but not the socket guard. Use the container checks
 (`--network none`) for anything that must hold at the kernel level.
 
+## Development
+
+The suite runs from this directory in its own environment. The container tests use the
+local `public.ecr.aws/lambda/python:3.12` and `:3.11` images and pull them when missing;
+the workflow requires zero skips.
+
+```bash
+python -m venv .venv
+.venv/bin/pip install . pytest==8.4.2
+.venv/bin/python -m pytest -p no:cacheprovider -c /dev/null --rootdir . tests
+```
+
 ## What stays out of this tool
 
 Service assertions (handlers, auth, caches, templates), stage values, real deployments and
