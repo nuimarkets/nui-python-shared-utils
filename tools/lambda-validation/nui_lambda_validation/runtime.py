@@ -34,6 +34,11 @@ def _requirement(raw):
     return Requirement(raw)
 
 
+def _satisfies(specifier, version):
+    """The host's rule (``metadata._contains``): a prerelease only where the specifier names one."""
+    return specifier.contains(version, prereleases=bool(specifier.prereleases))
+
+
 def _normalize(name):
     import re
 
@@ -112,7 +117,7 @@ def check_sdk(mode, root=TASK_ROOT, names=SDK):
         req = _requirement(raw)
         if _normalize(req.name) in wanted and (req.marker is None or req.marker.evaluate({"extra": ""})):
             version = metadata.version(req.name)
-            if not req.specifier.contains(version, prereleases=False):  # strict, as on the host
+            if not _satisfies(req.specifier, version):
                 _fail("SDK_CONSTRAINT", f"{names[0]} requires {req}, artifact has {version}")
     return report
 
@@ -168,7 +173,7 @@ def check_inventory(pins=None, root=TASK_ROOT, manifest=None):
             dependency = _normalize(req.name)
             if dependency not in installed:
                 _fail("CLOSURE_MISSING", f"{name} requires {req}, absent from artifact")
-            if not req.specifier.contains(Version(installed[dependency].version), prereleases=False):
+            if not _satisfies(req.specifier, Version(installed[dependency].version)):
                 _fail("CLOSURE_DEPENDENCY", f"{name} requires {req}, artifact has {installed[dependency].version}")
     if manifest is not None:
         seen = {name: {"version": d.version, "requires": d.requires or []} for name, d in installed.items()}

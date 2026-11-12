@@ -467,6 +467,9 @@ def test_a_prerelease_never_satisfies_a_range(tmp_path, repo):
     members["app_lib-1.1rc1.dist-info/METADATA"] = metadata("app-lib", "1.1rc1", ["helper>=2,<3"])
     adapter = _roots_only(repo, "app-lib>=1,<2\nboto3>=1.34\n")
     assert code_of(artifact.check, write_zip(tmp_path / "root.zip", members), adapter) == "CLOSURE_ROOT"
+    # A prerelease the requirement asks for by name is accepted, as `in` accepted it.
+    adapter = _roots_only(repo, "app-lib==1.1rc1\nboto3>=1.34\n")
+    artifact.check(write_zip(tmp_path / "explicit.zip", members), adapter)
 
 
 def test_accepted_majors_shape(repo, good_zip):

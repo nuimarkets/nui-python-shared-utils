@@ -343,3 +343,8 @@ def test_inventory_rejects_a_prerelease_in_a_range(tmp_path):
     info.mkdir()
     (info / "METADATA").write_bytes(metadata("s3transfer", "0.19.4rc1"))
     assert "CODE CLOSURE_DEPENDENCY" in run_host(root, "runtime.check_inventory(None, root=root)")
+    # boto3 naming the prerelease explicitly accepts it.
+    (root / "boto3-1.44.1.dist-info" / "METADATA").write_bytes(
+        metadata("boto3", "1.44.1", ["botocore<1.45.0,>=1.44.1", "s3transfer==0.19.4rc1"])
+    )
+    assert "OK" in run_host(root, "runtime.check_inventory(None, root=root)")

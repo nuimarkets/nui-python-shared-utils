@@ -68,10 +68,12 @@ def _requirement(raw, where):
 
 
 def _contains(specifier, version):
-    """Strict, as the source checks were: a prerelease never satisfies a range. Explicit,
-    because packaging's default for ``in`` differs between the host's packaging and the
-    image's vendored copy."""
-    return SpecifierSet(str(specifier)).contains(Version(version), prereleases=False)
+    """As the source checks' ``in`` was: a prerelease satisfies a specifier only when the
+    specifier itself names a prerelease (``==1.1rc1``, ``>=2.0b1``), never a plain range.
+    Spelled out, because packaging's default differs between the host's pinned copy and
+    the image's vendored one."""
+    spec = SpecifierSet(str(specifier))
+    return spec.contains(Version(version), prereleases=bool(spec.prereleases))
 
 
 def _dist_name(directory):
