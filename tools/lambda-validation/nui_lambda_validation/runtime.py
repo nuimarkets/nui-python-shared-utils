@@ -55,6 +55,7 @@ def install_network_guard():
         lambda: socket.create_connection(("192.0.2.1", 443)),
         lambda: socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("192.0.2.1", 443)),
         lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(b"probe", ("192.0.2.1", 9)),
+        lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendmsg([b"probe"], [], 0, ("192.0.2.1", 9)),
     )
     for probe in probes:
         try:
@@ -111,7 +112,7 @@ def check_sdk(mode, root=TASK_ROOT, names=SDK):
         req = _requirement(raw)
         if _normalize(req.name) in wanted and (req.marker is None or req.marker.evaluate({"extra": ""})):
             version = metadata.version(req.name)
-            if version not in req.specifier:
+            if not req.specifier.contains(version, prereleases=True):  # pip check's rule
                 _fail("SDK_CONSTRAINT", f"{names[0]} requires {req}, artifact has {version}")
     return report
 
@@ -167,7 +168,7 @@ def check_inventory(pins=None, root=TASK_ROOT, manifest=None):
             dependency = _normalize(req.name)
             if dependency not in installed:
                 _fail("CLOSURE_MISSING", f"{name} requires {req}, absent from artifact")
-            if Version(installed[dependency].version) not in req.specifier:
+            if not req.specifier.contains(Version(installed[dependency].version), prereleases=True):
                 _fail("CLOSURE_DEPENDENCY", f"{name} requires {req}, artifact has {installed[dependency].version}")
     if manifest is not None:
         seen = {name: {"version": d.version, "requires": d.requires or []} for name, d in installed.items()}

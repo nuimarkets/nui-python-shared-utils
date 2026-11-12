@@ -23,6 +23,22 @@ def _first(names, predicate):
     return None
 
 
+# Every standard mutant. One that cannot be built from an artifact must be declared in
+# `[negatives.not_applicable]` with a reason, so nothing drops out of the run unrecorded.
+STANDARD = (
+    "secret-file",
+    "traversal",
+    "duplicate",
+    "tool-in-artifact",
+    "foreign-abi",
+    "wrong-elf",
+    "undeclared-library",
+    "metadata-removed",
+    "sdk-removed",
+)
+EXACT_ONLY = ("version-substituted",)
+
+
 def plans(adapter, names):
     """Each applicable mutant: name -> (expected code, mutate(source_zip, target_zip))."""
     target = adapter.target
@@ -59,6 +75,8 @@ def plans(adapter, names):
     if sdk:
         found["sdk-removed"] = ("MISSING_REQUIRED_PATH", lambda s, d: _copy(s, d, drop=lambda n: n == sdk))
     for dist, roots in sorted(deps.get("test_only", {}).items()):
+        if not roots:
+            fail("ADAPTER_CONFIG", f"[dependencies.test_only] {dist} lists no top-level names")
         root = sorted(roots)[0]
         member = root if "." in root else f"{root}/__init__.py"
         found[f"test-only-leak-{dist}"] = ("TEST_ONLY_LEAK", adding(member, b""))
@@ -76,10 +94,20 @@ def plans(adapter, names):
         for value in forbidden.get(kind, ()):
             found[f"forbidden-{kind}-{value}"] = ("FORBIDDEN_PATH", adding(make(value), b""))
     reasons = adapter.get("negatives").get("not_applicable", {})
+    known = set(STANDARD) | set(EXACT_ONLY if exact else ()) | set(found)
     for name, reason in reasons.items():
+        if name not in known:
+            fail("ADAPTER_CONFIG", f"[negatives.not_applicable] {name} is not a negative this adapter has")
         if not isinstance(reason, str) or not reason.strip():
             fail("ADAPTER_CONFIG", f"[negatives.not_applicable] {name} needs a reason")
         found.pop(name, None)
+    owed = [n for n in STANDARD + (EXACT_ONLY if exact else ()) if n not in found and n not in reasons]
+    if owed:
+        fail(
+            "ADAPTER_CONFIG",
+            f"standard negatives {owed} cannot be built from this artifact; declare each in "
+            "[negatives.not_applicable] with a reason",
+        )
     return found
 
 
@@ -101,14 +129,21 @@ def _substitute(source, target, metadata_path):
     head, patch = version.rsplit(".", 1)
     new = f"{head}.{int(patch) + 1}"
     package = metadata_path.split("-", 1)[0]
+    changed = 0
     with zipfile.ZipFile(source) as original, zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as mutant:
         for info in original.infolist():
             data = original.read(info)
+            before = data
             if info.filename == metadata_path:
-                data = data.replace(f"Version: {version}\n".encode(), f"Version: {new}\n".encode(), 1)
+                data = data.replace(f"Version: {version}".encode(), f"Version: {new}".encode(), 1)
             elif info.filename == f"{package}/__init__.py":
                 data = data.replace(f"'{version}'".encode(), f"'{new}'".encode(), 1)
+                data = data.replace(f'"{version}"'.encode(), f'"{new}"'.encode(), 1)
+            changed += data != before
             mutant.writestr(info, data)
+    # Metadata and module both, or the mutant is not the coherent substitution it claims to be.
+    if changed != 2:
+        fail("NEGATIVE_INEFFECTIVE", f"version substitution changed {changed} of 2 members ({package} {version})")
 
 
 def run(archive, adapter, output):
@@ -129,7 +164,9 @@ def run(archive, adapter, output):
         else:
             results[name] = {"expected": expected, "code": None}
         mutant.unlink()
-    (output / "negative-controls.json").write_text(json.dumps(results, indent=2) + "\n")
+    exempt = adapter.get("negatives").get("not_applicable", {})
+    record = {"results": results, "not_applicable": dict(sorted(exempt.items()))}
+    (output / "negative-controls.json").write_text(json.dumps(record, indent=2) + "\n")
     wrong = {name: r for name, r in results.items() if r["code"] != r["expected"]}
     if wrong:
         fail("NEGATIVE_INEFFECTIVE", f"negative controls not rejected for their intended reason: {wrong}")

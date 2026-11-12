@@ -27,19 +27,23 @@ python -m venv .venv-validation
 ```
 
 Add `.venv-validation/` to `.gitignore` and keep `lambda-validation.toml`,
-`requirements-validation.txt` and `.venv-validation` out of the deployment package. Every
-check fails a ZIP that carries any of them (`TOOL_IN_ARTIFACT`).
+`requirements-validation.txt` and `.venv-validation` out of the deployment package.
+`check-zip`, `negatives` and `verify` fail a ZIP that carries any of them, at any depth
+(`TOOL_IN_ARTIFACT`).
 
 ## Commands
 
-Every failure exits 1 and prints `CODE: detail` on stderr. Codes are listed in
-`nui_lambda_validation/errors.py`; negative controls assert the code, not the text.
+Every failure exits 1 and prints `CODE: detail` on stderr, except `offline-pytest`, which
+exits with pytest's own status (3 with an `OFFLINE_GUARD:` line on stderr when the runner
+itself refuses). Codes are listed in `nui_lambda_validation/errors.py`; negative controls
+assert the code, not the text. A failure in the container smoke reports as `BUILD` with the
+in-container check's own code in its detail.
 
 | Command | What it does |
 | --- | --- |
-| `verify --config lambda-validation.toml --output DIR` | Builds every stage from `git archive HEAD` with synthetic configuration, then per stage: secret scan, `check-zip`, extraction proof, the adapter's smoke script in the Lambda image, `pip check` in the image; the first stage also runs `negatives`. The adapter, its lock files and its smoke script are read from the committed tree, never the working copy, and the adapter must sit at the repository's top level. Records the digests of the runtime image and of every `build_images` entry. Copies each compiled template out for the repository's own assertions. `DIR` must be new and outside the checkout |
+| `verify --config lambda-validation.toml --output DIR` | Builds every stage from `git archive HEAD` with synthetic configuration, then per stage: secret scan, `check-zip`, extraction proof, a check that the image runs the `[target]` Python, the adapter's smoke script in the Lambda image, and `pip check` in the image over the artifact itself (`/var/task` on `PYTHONPATH`, since `python -m pip` drops the working directory from `sys.path`); the first stage also runs `negatives`. Each stage's package is written to `.serverless-validation-<stage>/` inside the build tree, so the repository's package patterns must exclude `.serverless-*/**`. `[container.env]` may not set a variable the container command sets itself. The adapter, its lock files and its smoke script are read from the committed tree, never the working copy, and the adapter must sit at the repository's top level. Records the digests of the runtime image and of every `build_images` entry. Copies each compiled template out for the repository's own assertions. `DIR` must be new and outside the checkout |
 | `check-zip ZIP --config ...` | Member safety, secrets, exclusions, required paths, size, native ABI/ELF, dependency pins and closure, test-only leaks, optional major drift |
-| `negatives ZIP --config ... --output DIR` | Mutates the ZIP once per standard defect and once per configured exclusion rule; fails unless each mutant is rejected with its intended code |
+| `negatives ZIP --config ... --output DIR` | Mutates the ZIP once per standard defect and once per configured exclusion rule; fails unless each mutant is rejected with its intended code. A standard mutant the artifact cannot support (no SDK path in `[zip] required`, no `botocore` metadata) must be declared in `[negatives.not_applicable]` with a reason, and the reasons are written beside the results |
 | `extract ZIP DIR` | Extracts and proves the files on disk are exactly the members, byte for byte |
 | `offline-pytest --config ... --python APP_PYTHON [-- ARGS]` | Runs the application's suite in its own interpreter under the offline policy below |
 | `secret-scan DIR` | Deploy-time backstop: refuses a package directory with no ZIP, an unreadable ZIP, or a secret file |
@@ -141,12 +145,15 @@ runtime.assert_no_conftest()
 ## Offline runner limits
 
 The runner clears the environment (keeping only `PATH`, a temporary `HOME`, null AWS
-config files, the adapter's `passthrough_env` and `[offline.env]`), disables plugin
-autoload, and blocks outbound TCP and UDP in the test interpreter, proving the guard with
-probes before tests start. It runs the application's interpreter with `-P` so this package
-is not on the application's path. It is not an OS-level sandbox: a subprocess a test
-starts inherits the cleared environment but not the socket guard. Use the container checks
-(`--network none`) for anything that must hold at the kernel level.
+config files, the adapter's `passthrough_env` and `[offline.env]`, neither of which may name
+a variable the runner sets itself), disables plugin autoload, and replaces every
+`socket.socket` connect, connect_ex, sendto and sendmsg in the test interpreter, loopback and
+Unix sockets included, proving the guard with probes before tests start. Name resolution is
+not blocked. It runs the application's interpreter, which must be Python 3.11 or newer, with
+`-P` so this package is not on the application's path; install this tool in its own
+environment, as above, or the suite can still import it. It is not an OS-level sandbox: a
+subprocess a test starts inherits the cleared environment but not the socket guard. Use the
+container checks (`--network none`) for anything that must hold at the kernel level.
 
 ## Development
 

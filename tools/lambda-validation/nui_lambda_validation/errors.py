@@ -15,6 +15,7 @@ CODES = frozenset(
         "FORBIDDEN_PATH",
         "MAJOR_DRIFT",
         "METADATA_DUPLICATE",
+        "METADATA_INVALID",
         "MISSING_REQUIRED_PATH",
         "NEGATIVE_INEFFECTIVE",
         "NATIVE_ABI",

@@ -23,7 +23,11 @@ _GREP = re.compile(r"grep -E '([^']+)'")
 
 def check_script(script):
     """The shell backstop must grep for exactly the canonical pattern, once."""
-    patterns = _GREP.findall(Path(script).read_text())
+    try:
+        text = Path(script).read_text()
+    except OSError as error:
+        fail("BACKSTOP_DRIFT", f"{script}: {error}")
+    patterns = _GREP.findall(text)
     if patterns != [SECRET_FILE_PATTERN]:
         fail("BACKSTOP_DRIFT", f"{script}: grep -E patterns {patterns} != [{SECRET_FILE_PATTERN!r}]")
     return {"script": str(script), "pattern": SECRET_FILE_PATTERN}

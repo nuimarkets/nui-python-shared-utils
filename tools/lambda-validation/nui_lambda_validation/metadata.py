@@ -5,15 +5,20 @@ from pathlib import PurePosixPath
 
 from packaging.markers import default_environment
 from packaging.requirements import InvalidRequirement, Requirement
-from packaging.specifiers import SpecifierSet
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
-from packaging.version import Version
+from packaging.version import InvalidVersion, Version
 
 from .errors import fail
+from .zipcheck import read_member
 
 
 def _requirement_lines(path):
-    for raw in path.read_text().splitlines():
+    try:
+        text = path.read_text()
+    except OSError as error:
+        fail("ADAPTER_CONFIG", f"{path}: {error}")
+    for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
@@ -54,14 +59,40 @@ def read_roots(path):
     return roots
 
 
+def _requirement(raw, where):
+    try:
+        return Requirement(raw)
+    except InvalidRequirement as error:
+        fail("METADATA_INVALID", f"{where}: {raw}: {error}")
+
+
+def _contains(specifier, version):
+    """pip's own rule (``pip check``): an installed prerelease satisfies a matching range."""
+    return SpecifierSet(str(specifier)).contains(Version(version), prereleases=True)
+
+
 def zip_distributions(bundle):
-    """Every top-level ``*.dist-info/METADATA``, keyed by normalized name; duplicates fail."""
+    """Every top-level ``*.dist-info/METADATA``, keyed by normalized name; duplicates fail.
+
+    A top-level ``*.egg-info`` is refused: the runtime's ``importlib.metadata`` would count it
+    as a distribution that these host checks never saw."""
     found = {}
     for name in bundle.namelist():
         path = PurePosixPath(name)
+        if len(path.parts) >= 1 and path.parts[0].endswith(".egg-info"):
+            fail("METADATA_INVALID", f"egg-info distributions are not supported: {path.parts[0]}")
         if len(path.parts) != 2 or path.name != "METADATA" or not path.parts[0].endswith(".dist-info"):
             continue
-        message = BytesParser().parsebytes(bundle.read(name))
+        message = BytesParser().parsebytes(read_member(bundle, name))
+        if not message["Name"] or not message["Version"]:
+            fail("METADATA_INVALID", f"{name}: no Name or Version")
+        try:
+            Version(message["Version"])
+            SpecifierSet(message.get("Requires-Python") or "")
+        except (InvalidVersion, InvalidSpecifier) as error:
+            fail("METADATA_INVALID", f"{name}: {error}")
+        for raw in message.get_all("Requires-Dist", []):
+            _requirement(raw, name)
         key = canonicalize_name(message["Name"])
         if key in found:
             fail("METADATA_DUPLICATE", f"{key}: {found[key]['path']} and {name}")
@@ -118,7 +149,7 @@ def closure(distributions, roots, environment, pins=None):
             continue
         name = canonicalize_name(req.name)
         extras.setdefault(name, set()).update(req.extras)
-        if name not in versions or Version(versions[name]) not in req.specifier:
+        if name not in versions or not _contains(req.specifier, versions[name]):
             errors["CLOSURE_ROOT"].append(f"{req} -> {versions.get(name)}")
     pending = list(extras)
     examined = {}
@@ -133,17 +164,17 @@ def closure(distributions, roots, environment, pins=None):
             errors["CLOSURE_MISSING"].append(name)
             continue
         data = distributions[name]
-        if data["requires_python"] and Version(full) not in SpecifierSet(data["requires_python"]):
+        if data["requires_python"] and not _contains(data["requires_python"], full):
             errors["REQUIRES_PYTHON"].append(f"{name} requires {data['requires_python']}")
         for raw in data["requires"]:
-            req = Requirement(raw)
+            req = _requirement(raw, data["path"])
             if req.marker is not None and not any(
                 req.marker.evaluate(dict(environment, extra=extra)) for extra in [""] + sorted(wanted)
             ):
                 continue
             dependency = canonicalize_name(req.name)
             edges.append([name, str(req)])
-            if dependency not in versions or Version(versions[dependency]) not in req.specifier:
+            if dependency not in versions or not _contains(req.specifier, versions[dependency]):
                 errors["CLOSURE_DEPENDENCY"].append(f"{name}: {req} -> {versions.get(dependency)}")
             before = set(extras.get(dependency, set()))
             extras.setdefault(dependency, set()).update(req.extras)
@@ -179,7 +210,8 @@ def test_only(names, production, joint, mapping):
         if root in forbidden:
             hits.append(name)
         elif root.endswith((".dist-info", ".egg-info")):
-            dist = canonicalize_name(root.rsplit(".", 1)[0].rsplit("-", 1)[0])
+            # `<name>-<version>[-pyX.Y].egg-info`: the name is everything before the first dash.
+            dist = canonicalize_name(root.rsplit(".", 1)[0].split("-", 1)[0])
             if dist in exclusive:
                 hits.append(name)
     if hits:
@@ -190,6 +222,10 @@ def test_only(names, production, joint, mapping):
 def check_majors(distributions, accepted):
     """Range requirements let a rebuild move a dependency major. ``accepted`` maps each
     distribution of an accepted artifact to its major; the set and every major must hold."""
+    if not isinstance(accepted, dict) or not all(
+        isinstance(major, int) and not isinstance(major, bool) for major in accepted.values()
+    ):
+        fail("ADAPTER_CONFIG", "accepted_majors must map each distribution name to an integer major")
     actual = {name: Version(data["version"]).major for name, data in distributions.items()}
     expected = {canonicalize_name(name): major for name, major in accepted.items()}
     if actual != expected:

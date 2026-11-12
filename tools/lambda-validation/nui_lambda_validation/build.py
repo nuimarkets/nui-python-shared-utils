@@ -49,15 +49,26 @@ def prepare(tree, root, substitutions=(), files=None):
     """Link the checkout's ``node_modules``, apply exact-count substitutions, write synthetic files."""
     tree, root = Path(tree), Path(root)
     (tree / "node_modules").symlink_to(root / "node_modules", target_is_directory=True)
+
+    def inside(relative):
+        # Resolving follows the node_modules link, so this also refuses writes into the checkout.
+        path = (tree / relative).resolve()
+        if not path.is_relative_to(tree.resolve()):
+            fail("ADAPTER_CONFIG", f"{relative} resolves outside the build tree")
+        return path
+
     for item in substitutions:
-        path = tree / item["file"]
-        text = path.read_text()
+        path = inside(item["file"])
+        try:
+            text = path.read_text()
+        except OSError as error:
+            fail("BUILD", f"substitution target {item['file']}: {error}")
         found = text.count(item["old"])
         if found != item["count"]:
             fail("BUILD", f"{item['file']}: {item['old']!r} occurs {found} times, adapter expects {item['count']}")
         path.write_text(text.replace(item["old"], item["new"]))
     for relative, text in (files or {}).items():
-        path = tree / relative
+        path = inside(relative)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
 

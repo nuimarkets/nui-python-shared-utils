@@ -26,6 +26,7 @@ def guard():
         lambda: socket.create_connection(("192.0.2.1", 443)),
         lambda: socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("192.0.2.1", 443)),
         lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(b"probe", ("192.0.2.1", 9)),
+        lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendmsg([b"probe"], [], 0, ("192.0.2.1", 9)),
     ):
         try:
             probe()

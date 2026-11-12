@@ -217,3 +217,92 @@ def test_every_code_raised_is_declared():
             ):
                 raised.add(node.args[0].value)
     assert raised and raised <= CODES, sorted(raised - CODES)
+
+
+def _extension_module():
+    """A stdlib extension module shipped as a file, to copy into a fake task root."""
+    import importlib.util
+
+    for name in ("_bz2", "_lzma", "_ctypes", "_decimal", "_ssl"):
+        spec = importlib.util.find_spec(name)
+        if spec and spec.origin and spec.origin.endswith(".so"):
+            return name, Path(spec.origin)
+    raise AssertionError("no stdlib extension module found as a file")
+
+
+def test_check_native_imports_from_the_artifact_with_this_abi(tmp_path):
+    name, origin = _extension_module()
+    root = fake_root(tmp_path / "task")
+    tag = f"cpython-{sys.version_info.major}{sys.version_info.minor}"
+    shutil.copy(origin, root / f"{name}.{tag}-x86_64-linux-gnu.so")
+    assert "OK" in run_host(root, f"runtime.check_native([{name!r}], root=root)")
+    assert "CODE NATIVE_EXPECTED" in run_host(root, "runtime.check_native(['boto3'], root=root)")
+    (root / f"{name}.{tag}-x86_64-linux-gnu.so").rename(root / f"{name}.so")
+    assert "CODE NATIVE_ABI" in run_host(root, f"runtime.check_native([{name!r}], root=root)")
+
+
+def test_inventory_duplicates_constraints_and_manifest(tmp_path):
+    root = fake_root(tmp_path / "dup")
+    shutil.copytree(root / "boto3-1.44.1.dist-info", root / "Boto3-1.44.1.dist-info")
+    assert "CODE METADATA_DUPLICATE" in run_host(root, "runtime.check_inventory(None, root=root)")
+    root = fake_root(tmp_path / "constraint")
+    (root / "boto3-1.44.1.dist-info" / "METADATA").write_bytes(metadata("boto3", "1.44.1", ["botocore>=1.46"]))
+    assert "CODE CLOSURE_DEPENDENCY" in run_host(root, "runtime.check_inventory(None, root=root)")
+    root = fake_root(tmp_path / "manifest")
+    manifest = {
+        "boto3": {"version": "1.44.1", "requires": ["botocore<1.45.0,>=1.44.1", "s3transfer<0.20.0,>=0.19.0"]},
+        "botocore": {"version": "1.44.1", "requires": []},
+        "s3transfer": {"version": "0.19.3", "requires": []},
+    }
+    assert "OK" in run_host(root, f"runtime.check_inventory(None, root=root, manifest={manifest!r})")
+    manifest["s3transfer"]["version"] = "0.19.4"
+    out = run_host(root, f"runtime.check_inventory(None, root=root, manifest={manifest!r})")
+    assert "CODE EXTRACTION_MISMATCH" in out
+
+
+def test_tool_metadata_beside_the_mount_or_importable(tmp_path):
+    root = fake_root(tmp_path / "task")
+    mount = tmp_path / "mount"
+    shutil.copytree(PACKAGE, mount / "nui_lambda_validation", ignore=shutil.ignore_patterns("__pycache__"))
+
+    def isolated(extra_path):
+        # -S: no site-packages, so an installed copy of this tool cannot answer for the mount.
+        script = textwrap.dedent(
+            f"""
+            import sys
+            from pathlib import Path
+            sys.path[:0] = [{str(mount)!r}, {str(extra_path)!r}]
+            from nui_lambda_validation import runtime
+            try:
+                runtime.assert_tool_isolated(root=Path({str(root)!r}))
+            except runtime.RuntimeCheckError as error:
+                print("CODE", error.code)
+            else:
+                print("OK")
+            """
+        )
+        result = subprocess.run([sys.executable, "-I", "-S", "-c", script], capture_output=True, text=True)
+        return result.stdout + result.stderr
+
+    assert "OK" in isolated(root)
+    info = root / "nui_lambda_validation-0.1.0.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text("Metadata-Version: 2.1\nName: nui-lambda-validation\nVersion: 0.1.0\n")
+    assert "CODE TOOL_IN_ARTIFACT" in isolated(root)
+    shutil.rmtree(info)
+    (mount / "nui_lambda_validation-0.1.0.dist-info").mkdir()
+    assert "CODE TOOL_IN_ARTIFACT" in isolated(root)
+
+
+def test_container_pip_check_sees_the_artifact(tmp_path, image):
+    consistent = fake_root(tmp_path / "ok")
+    broken = fake_root(tmp_path / "broken")
+    (broken / "boto3-1.44.1.dist-info" / "METADATA").write_bytes(metadata("boto3", "1.44.1", ["botocore>=1.46"]))
+
+    def pip_check(root):
+        command = container.argv(IMAGE, root, "x86_64", args=("-m", "pip", "check"), pythonpath=container.TASK_ROOT)
+        return subprocess.run(command, capture_output=True, text=True)
+
+    assert pip_check(consistent).returncode == 0
+    result = pip_check(broken)
+    assert result.returncode != 0 and "botocore" in result.stdout + result.stderr

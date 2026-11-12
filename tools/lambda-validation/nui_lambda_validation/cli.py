@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 import shutil
+import subprocess
 import sys
 from importlib import metadata as importlib_metadata
 from pathlib import Path
@@ -20,16 +21,22 @@ _PIN = re.compile(r"^nui-lambda-validation @ git\+https://[^@\s]+@([0-9a-f]{40})
 
 def self_check(requirement):
     """The installed tool must come from exactly the commit the requirement file pins."""
-    lines = [
-        line.strip() for line in Path(requirement).read_text().splitlines() if line.strip() and not line.startswith("#")
-    ]
+    try:
+        text = Path(requirement).read_text()
+    except OSError as error:
+        fail("SELF_CHECK", f"{requirement}: {error}")
+    lines = [line.strip() for line in text.splitlines() if line.strip() and not line.strip().startswith("#")]
     match = _PIN.match(lines[0]) if len(lines) == 1 else None
     if not match:
         fail("SELF_CHECK", f"{requirement}: expected one full-SHA VCS line for nui-lambda-validation")
     try:
-        raw = importlib_metadata.distribution("nui-lambda-validation").read_text("direct_url.json")
+        dist = importlib_metadata.distribution("nui-lambda-validation")
     except importlib_metadata.PackageNotFoundError:
         fail("SELF_CHECK", "nui-lambda-validation is not installed as a distribution")
+    # The record describes the installed copy; a different copy earlier on sys.path would run instead.
+    if Path(str(dist.locate_file("nui_lambda_validation/cli.py"))).resolve() != Path(__file__).resolve():
+        fail("SELF_CHECK", f"running {__file__}, not the installed distribution's copy")
+    raw = dist.read_text("direct_url.json")
     commit = json.loads(raw or "{}").get("vcs_info", {}).get("commit_id")
     if commit != match.group(1):
         fail("SELF_CHECK", f"installed from {commit}, requirement pins {match.group(1)}")
@@ -100,20 +107,32 @@ def verify(adapter, output, stages=None, keep_extracted=False):
         machine = adapter.target["machine"]
         smoke_env = dict(box.get("env", {}), VALIDATION_STAGE=stage)
         script = adapter.file(box["smoke"])
-        if container.run(
-            container.argv(image, extracted, machine, smoke_env, script, proof=proof), output / f"smoke-{stage}.log"
-        ):
-            fail("BUILD", f"container smoke failed for {stage}; see {output / f'smoke-{stage}.log'}")
-        if container.run(
-            container.argv(image, extracted, machine, smoke_env, args=("-m", "pip", "check")),
-            output / f"pip-check-{stage}.log",
-        ):
-            fail("BUILD", f"pip check failed for {stage}; see {output / f'pip-check-{stage}.log'}")
+        major, minor = adapter.target["python"].split(".")
+        version_log = output / f"python-version-{stage}.log"
+        same = f"import sys; sys.exit(0 if sys.version_info[:2] == ({int(major)}, {int(minor)}) else 1)"
+        if container.run(container.argv(image, extracted, machine, args=("-c", same)), version_log):
+            fail("BUILD", f"{image} is not Python {adapter.target['python']}, the [target] the host checks used")
+        smoke_log = output / f"smoke-{stage}.log"
+        if container.run(container.argv(image, extracted, machine, smoke_env, script, proof=proof), smoke_log):
+            fail("BUILD", f"container smoke failed for {stage} ({_runtime_failure(smoke_log)}); see {smoke_log}")
+        # The artifact on PYTHONPATH: `python -m pip` drops the working directory from sys.path.
+        pip_log = output / f"pip-check-{stage}.log"
+        pip_check = container.argv(
+            image, extracted, machine, smoke_env, args=("-m", "pip", "check"), pythonpath=container.TASK_ROOT
+        )
+        if container.run(pip_check, pip_log):
+            fail("BUILD", f"pip check failed for {stage}; see {pip_log}")
         if not keep_extracted:
             shutil.rmtree(extracted)
         manifest["artifacts"].append(report)
         (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest
+
+
+def _runtime_failure(log):
+    """The in-container check's own code, from the last ``RuntimeCheckError`` in the smoke log."""
+    found = re.findall(r"RuntimeCheckError: ([A-Z_]+: .*)", Path(log).read_text(errors="replace"))
+    return found[-1][:300] if found else "no runtime check code in the log"
 
 
 def main(argv=None):
@@ -176,6 +195,10 @@ def main(argv=None):
             result = backstop.check_script(args.script)
     except ValidationError as error:
         print(f"{error.code}: {error.detail}", file=sys.stderr)
+        return 1
+    except (OSError, subprocess.CalledProcessError) as error:
+        # A missing file, interpreter, git or docker still exits with a code rather than a traceback.
+        print(f"BUILD: {type(error).__name__}: {error}", file=sys.stderr)
         return 1
     print(json.dumps(result, indent=2, default=str))
     return 0

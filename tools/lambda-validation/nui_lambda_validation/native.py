@@ -4,6 +4,7 @@ import re
 from pathlib import PurePosixPath
 
 from .errors import fail
+from .zipcheck import read_member
 
 ELF_MACHINE = {"x86_64": 62, "aarch64": 183}
 _ABI_TAG = re.compile(r"\.(?:cpython-(\d{2,3})|abi3)[^/]*\.so$")
@@ -22,7 +23,7 @@ def classify(name):
 
 
 def elf_header(bundle, name, machine):
-    header = bundle.read(name)[:20]
+    header = read_member(bundle, name)[:20]
     if len(header) < 20 or header[:6] != b"\x7fELF\x02\x01":
         fail("NATIVE_ELF", f"not ELF64 little-endian: {name}")
     found = int.from_bytes(header[18:20], "little")
@@ -48,6 +49,10 @@ def inspect(bundle, python, machine, rules):
             if match.group(1) != tag:
                 fail("NATIVE_ABI", f"foreign Python ABI {match.group(0)}: {name}")
         if classify(name) == "extension":
+            # CPython imports only `.cpython-XY-<platform>.so` and `.abi3.so`; a debug (`312d`)
+            # or free-threaded (`312t`) build carries the right digits and still never loads.
+            if not re.search(rf"\.(?:cpython-{tag}-[^/]*|abi3)\.so$", PurePosixPath(name).name):
+                fail("NATIVE_ABI", f"extension is not cpython-{tag}-<platform> or abi3: {name}")
             extensions.append(name)
         elif name in declared:
             libraries.append(name)

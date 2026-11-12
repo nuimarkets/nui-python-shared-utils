@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 from conftest import ADAPTER, PINS, ROOTS, base_members, write_zip
@@ -65,7 +66,7 @@ def project(tmp_path):
 
 @pytest.fixture
 def stubs(tmp_path, monkeypatch):
-    calls = {"package": [], "digests": [], "run": []}
+    calls = {"package": [], "digests": [], "run": [], "fail": {}, "log": {}}
     good = write_zip(tmp_path / "artifact.zip", base_members())
 
     def package(tree, stage, serverless, env, log):
@@ -88,8 +89,11 @@ def stubs(tmp_path, monkeypatch):
         return [f"{image}@sha256:{'0' * 64}"]
 
     def run(command, log):
+        index = len(calls["run"])
         calls["run"].append(command)
-        return 0
+        if index in calls["log"]:
+            Path(log).write_text(calls["log"][index])
+        return calls["fail"].get(index, 0)
 
     monkeypatch.setattr(build, "package", package)
     monkeypatch.setattr(container, "image_digests", digests)
@@ -113,8 +117,27 @@ def test_verify_runs_every_stage_and_records_both_images(tmp_path, project, stub
     assert all(call["serverless_yml"].count("000000000000") == 2 for call in stubs["package"])
     assert all(call["config"] == "SYNTHETIC: value\n" for call in stubs["package"])
     assert stubs["package"][0]["serverless"] == project / "node_modules" / ".bin" / "serverless"
-    # smoke and pip check per stage
-    assert len(stubs["run"]) == 4
+    # interpreter version, smoke and pip check per stage
+    assert len(stubs["run"]) == 6
+    version, smoke, pip_check = stubs["run"][:3]
+    assert version[-2:] == ["-c", "import sys; sys.exit(0 if sys.version_info[:2] == (3, 12) else 1)"]
+    assert "/smoke.py" in smoke and "PYTHONPATH=/opt/nui-lambda-validation" in smoke
+    # python -m pip drops the working directory from sys.path, so the artifact is put on PYTHONPATH.
+    assert pip_check[-2:] == ["pip", "check"] and "PYTHONPATH=/var/task" in pip_check
+    assert pip_check.index("PYTHONPATH=/var/task") > max(
+        i for i, a in enumerate(pip_check) if a == "VALIDATION_STAGE=dev"
+    )
+
+
+@pytest.mark.parametrize("index, message", [(0, "is not Python 3.12"), (1, "SDK_PROVENANCE"), (2, "pip check failed")])
+def test_verify_fails_on_each_container_step(tmp_path, project, stubs, index, message):
+    stubs["fail"][index] = 1
+    stubs["log"][
+        1
+    ] = "Traceback ...\nnui_lambda_validation.runtime.RuntimeCheckError: SDK_PROVENANCE: boto3 from /var/lang\n"
+    with pytest.raises(ValidationError, match=message) as caught:
+        cli.verify(Adapter(project / "lambda-validation.toml"), tmp_path / "out")
+    assert caught.value.code == "BUILD"
 
 
 def test_verify_reads_inputs_from_the_committed_tree(tmp_path, project, stubs):
@@ -209,9 +232,93 @@ def test_adapter_rejects_unknown_keys_and_wrong_types(project, old, new):
 
 
 def test_readme_example_is_a_valid_adapter(tmp_path):
-    from pathlib import Path
-
     readme = (Path(__file__).resolve().parents[1] / "README.md").read_text()
     block = readme.split("```toml\n", 1)[1].split("```", 1)[0]
     (tmp_path / "lambda-validation.toml").write_text(block)
     Adapter(tmp_path / "lambda-validation.toml")
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        '[offline]\npassthrough_env = ["HOME"]\n',
+        '[offline]\npassthrough_env = ["AWS_SHARED_CREDENTIALS_FILE"]\n',
+        '[offline.env]\nPYTEST_DISABLE_PLUGIN_AUTOLOAD = ""\n',
+        '[container.env]\nPYTHONPATH = "/var/task"\n',
+        '[container.env]\nAWS_CONFIG_FILE = "/root/.aws/config"\n',
+    ],
+)
+def test_adapter_cannot_undo_runner_or_container_isolation(tmp_path, extra):
+    path = tmp_path / "lambda-validation.toml"
+    text = ADAPTER + extra
+    if extra.startswith("[container.env]"):
+        text = ADAPTER + '[container]\nimage = "i"\nsmoke = "s.py"\n' + extra
+    path.write_text(text)
+    assert code_of(Adapter, path) == "ADAPTER_CONFIG"
+
+
+def test_prepare_stays_inside_the_build_tree(tmp_path):
+    root = tmp_path / "checkout"
+    (root / "node_modules").mkdir(parents=True)
+    (root / "node_modules" / "x.js").write_text("ACCOUNT")
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    item = {"file": "node_modules/x.js", "old": "ACCOUNT", "new": "0", "count": 1}
+    assert code_of(build.prepare, tree, root, [item], {}) == "ADAPTER_CONFIG"
+    assert (root / "node_modules" / "x.js").read_text() == "ACCOUNT"
+    tree2 = tmp_path / "tree2"
+    tree2.mkdir()
+    assert code_of(build.prepare, tree2, root, [], {"../escaped.yml": "x"}) == "ADAPTER_CONFIG"
+    assert not (tmp_path / "escaped.yml").exists()
+
+
+SHA = "0123456789abcdef0123456789abcdef01234567"
+LINE = "nui-lambda-validation @ git+https://github.com/example/repo@{}#subdirectory=tools/lambda-validation\n"
+
+
+class FakeDistribution:
+    def __init__(self, direct_url, location=None):
+        self.direct_url = direct_url
+        self.location = location or cli.__file__
+
+    def read_text(self, name):
+        assert name == "direct_url.json"
+        return self.direct_url
+
+    def locate_file(self, path):
+        assert path == "nui_lambda_validation/cli.py"
+        return self.location
+
+
+@pytest.mark.parametrize(
+    "requirement, direct_url, location, outcome",
+    [
+        (LINE.format(SHA), json.dumps({"vcs_info": {"commit_id": SHA}}), None, "ok"),
+        ("# pinned for CI\n" + LINE.format(SHA), json.dumps({"vcs_info": {"commit_id": SHA}}), None, "ok"),
+        (LINE.format(SHA), json.dumps({"vcs_info": {"commit_id": "f" * 40}}), None, "SELF_CHECK"),
+        (LINE.format(SHA), None, None, "SELF_CHECK"),
+        (LINE.format(SHA[:12]), json.dumps({"vcs_info": {"commit_id": SHA}}), None, "SELF_CHECK"),
+        (LINE.format(SHA) * 2, json.dumps({"vcs_info": {"commit_id": SHA}}), None, "SELF_CHECK"),
+        (LINE.format(SHA), json.dumps({"vcs_info": {"commit_id": SHA}}), "/elsewhere/cli.py", "SELF_CHECK"),
+    ],
+)
+def test_self_check(tmp_path, monkeypatch, requirement, direct_url, location, outcome):
+    path = tmp_path / "requirements-validation.txt"
+    path.write_text(requirement)
+    monkeypatch.setattr(cli.importlib_metadata, "distribution", lambda name: FakeDistribution(direct_url, location))
+    if outcome == "ok":
+        assert cli.self_check(path) == {"commit": SHA}
+    else:
+        assert code_of(cli.self_check, path) == outcome
+
+
+def test_self_check_needs_an_installed_distribution(tmp_path, monkeypatch):
+    path = tmp_path / "requirements-validation.txt"
+    path.write_text(LINE.format(SHA))
+
+    def missing(name):
+        raise cli.importlib_metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(cli.importlib_metadata, "distribution", missing)
+    assert code_of(cli.self_check, path) == "SELF_CHECK"
+    assert code_of(cli.self_check, tmp_path / "absent.txt") == "SELF_CHECK"

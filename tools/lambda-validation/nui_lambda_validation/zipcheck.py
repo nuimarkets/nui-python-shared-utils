@@ -28,8 +28,10 @@ def open_zip(archive):
 
 
 def member_safety(names):
-    """Unique, relative, no traversal. Applies to every artifact."""
+    """Unique, relative, no traversal, and no file that is also a parent directory of
+    another member (it could not be extracted as both). Applies to every artifact."""
     seen = set()
+    parents = set()
     for name in names:
         if name in seen:
             fail("DUPLICATE_MEMBER", name)
@@ -37,6 +39,27 @@ def member_safety(names):
         path = PurePosixPath(name)
         if path.is_absolute() or ".." in path.parts or "\\" in name:
             fail("UNSAFE_MEMBER", name)
+        parents.update(parent.as_posix() for parent in path.parents if parent.as_posix() != ".")
+    collisions = sorted(name for name in seen if not name.endswith("/") and name in parents)
+    if collisions:
+        fail("UNSAFE_MEMBER", f"file is also a directory of other members: {collisions[:10]}")
+
+
+def no_symlinks(infos):
+    """A symlink member extracts as a regular file here, so the tree the checks see would
+    differ from what an unzip that keeps links produces."""
+    links = [info.filename for info in infos if (info.external_attr >> 16) & 0o170000 == 0o120000]
+    if links:
+        fail("UNSAFE_MEMBER", f"symlink members: {links[:10]}")
+
+
+def read_member(bundle, member):
+    """Read one member; a corrupt or unsupported member fails as UNREADABLE_ZIP."""
+    try:
+        return bundle.read(member)
+    except (OSError, zipfile.BadZipFile, NotImplementedError, RuntimeError) as error:
+        name = getattr(member, "filename", member)
+        fail("UNREADABLE_ZIP", f"{name}: {error}")
 
 
 def secret_files(names):
@@ -107,6 +130,7 @@ def inspect(archive, rules):
         infos = bundle.infolist()
         names = [info.filename for info in infos]
         member_safety(names)
+        no_symlinks(infos)
         secret_files(names)
         forbidden_paths(names, rules.get("forbidden", {}))
         required_paths(names, rules.get("required", ()))

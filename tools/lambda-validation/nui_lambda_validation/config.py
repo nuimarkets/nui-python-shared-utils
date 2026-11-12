@@ -4,11 +4,15 @@ Every section, key and value type is checked when the file is read: a misspelled
 would otherwise silently drop the check it configures.
 """
 
+import re
 from pathlib import Path
 
 import tomllib
 
+from .container import RESERVED_ENV as RESERVED_CONTAINER_ENV
 from .errors import fail
+from .offline import RESERVED_ENV as RESERVED_OFFLINE_ENV
+from .zipcheck import LAMBDA_UNZIPPED_LIMIT
 
 MODES = {"exact", "roots-only"}
 MACHINES = {"x86_64", "aarch64"}
@@ -117,6 +121,10 @@ class Adapter:
         for key in ("python", "python_full_version", "machine"):
             if key not in target:
                 fail("ADAPTER_CONFIG", f"[target] needs {key}")
+        if not re.fullmatch(r"3\.\d+", target["python"]) or not re.fullmatch(
+            r"3\.\d+\.\d+", target["python_full_version"]
+        ):
+            fail("ADAPTER_CONFIG", "[target] python is X.Y and python_full_version is X.Y.Z")
         if not target["python_full_version"].startswith(target["python"] + "."):
             fail("ADAPTER_CONFIG", "[target] python_full_version does not match python")
         if target["machine"] not in MACHINES:
@@ -128,6 +136,23 @@ class Adapter:
             fail("ADAPTER_CONFIG", "[dependencies] exact mode needs pins")
         if "roots" not in deps:
             fail("ADAPTER_CONFIG", "[dependencies] needs roots")
+        if ("test_only" in deps) != ("test_lock" in deps):
+            fail("ADAPTER_CONFIG", "[dependencies] test_only and test_lock go together, or the leak check never runs")
+        limit = self.get("zip").get("uncompressed_limit", LAMBDA_UNZIPPED_LIMIT)
+        if not 0 < limit <= LAMBDA_UNZIPPED_LIMIT:
+            fail(
+                "ADAPTER_CONFIG", f"[zip] uncompressed_limit must be in 1..{LAMBDA_UNZIPPED_LIMIT} (Lambda's own limit)"
+            )
+        # The isolation the runner and the container impose is not the adapter's to undo.
+        offline_policy = self.get("offline")
+        reserved = sorted(
+            (set(offline_policy.get("passthrough_env", [])) | set(offline_policy.get("env", {}))) & RESERVED_OFFLINE_ENV
+        )
+        if reserved:
+            fail("ADAPTER_CONFIG", f"[offline] may not pass through or set {reserved}")
+        reserved = sorted(set(self.get("container").get("env", {})) & RESERVED_CONTAINER_ENV)
+        if reserved:
+            fail("ADAPTER_CONFIG", f"[container.env] may not set {reserved}")
 
     def require(self, section, keys=()):
         if section not in self.data:

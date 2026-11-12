@@ -11,6 +11,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from .errors import fail
+
 BASE_ENV = {
     "LANG": "C.UTF-8",
     "AWS_EC2_METADATA_DISABLED": "true",
@@ -22,9 +24,15 @@ BASE_ENV = {
     "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
 }
 BOOTSTRAP = Path(__file__).with_name("_offline_bootstrap.py")
+# Names the runner sets itself. An adapter that passed one through or overrode it would
+# hand the suite back a real HOME, real AWS config or plugin autoload.
+RESERVED_ENV = frozenset(BASE_ENV) | {"HOME", "NUI_LAMBDA_VALIDATION_POLICY"}
 
 
 def environment(home, passthrough=(), fixed=None, source=None):
+    reserved = sorted((set(passthrough) | set(fixed or {})) & RESERVED_ENV)
+    if reserved:
+        fail("ADAPTER_CONFIG", f"the offline runner sets {reserved} itself")
     source = os.environ if source is None else source
     env = {"PATH": source.get("PATH", "/usr/bin:/bin"), "HOME": str(home)}
     env.update(BASE_ENV)
@@ -47,7 +55,12 @@ def run(python, root, args, plugins=(), allowed_skips=(), passthrough=(), fixed_
         "allowed_skips": list(allowed_skips),
         "not_loaded": dict(not_loaded or {}),
     }
+    # absolute(), not resolve(): a venv's python is a symlink, and resolving it leaves the venv.
+    python = Path(python).absolute()
     with tempfile.TemporaryDirectory(prefix="lambda-validation-home-") as home:
         env = environment(home, passthrough, fixed_env)
         env["NUI_LAMBDA_VALIDATION_POLICY"] = json.dumps(policy)
-        return subprocess.run([str(python), "-P", str(BOOTSTRAP)], cwd=policy["root"], env=env).returncode
+        try:
+            return subprocess.run([str(python), "-P", str(BOOTSTRAP)], cwd=policy["root"], env=env).returncode
+        except OSError as error:
+            fail("OFFLINE_GUARD", f"cannot run the application interpreter {python}: {error}")

@@ -5,13 +5,15 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from conftest import ADAPTER, base_members, elf, metadata, mutate, write_zip
+from conftest import ADAPTER, PINS, base_members, elf, metadata, mutate, write_zip
 
 from nui_lambda_validation import artifact, backstop, negatives
 from nui_lambda_validation.config import Adapter
 from nui_lambda_validation.errors import ValidationError
 from nui_lambda_validation.extract import extract
 from nui_lambda_validation.metadata import read_pins, read_roots
+
+PINS_TEST = PINS + "pytest==8.4.2\n"
 
 
 def code_of(call, *args):
@@ -50,6 +52,11 @@ def test_coherent_artifact_passes(good_zip, adapter):
         ({"other.cpython-312-x86_64-linux-gnu.so": b"\x7fELF\x01\x01" + b"\0" * 40}, "NATIVE_ELF"),
         ({"vendor/libother.so": elf()}, "NATIVE_UNDECLARED_LIB"),
         ({"vendor/libother.so.1.2": elf()}, "NATIVE_UNDECLARED_LIB"),
+        ({"other.cpython-312t-x86_64-linux-gnu.so": elf()}, "NATIVE_ABI"),
+        ({"other.cpython-312d-x86_64-linux-gnu.so": elf()}, "NATIVE_ABI"),
+        ({"pkg\\evil.py": b""}, "UNSAFE_MEMBER"),
+        ({"handler.py/nested.py": b""}, "UNSAFE_MEMBER"),
+        ({"pytest-8.4.2-py3.12.egg-info/PKG-INFO": b""}, "METADATA_INVALID"),
     ],
 )
 def test_member_and_native_defects(tmp_path, adapter, change, expected):
@@ -240,6 +247,8 @@ def test_standard_negatives_reach_intended_codes(tmp_path, adapter, good_zip):
         "wrong-elf",
         "undeclared-library",
         "sdk-removed",
+        "metadata-removed",
+        "version-substituted",
     }
     assert expected <= set(results)
     assert {name for name in results if name.startswith("forbidden-")} == {
@@ -339,3 +348,155 @@ def test_extraction_mismatch_detected(tmp_path, good_zip, monkeypatch):
 )
 def test_validator_material_rejected_at_any_depth(tmp_path, adapter, member):
     assert code_of(artifact.check, mutate(tmp_path, {member: b""}), adapter) == "TOOL_IN_ARTIFACT"
+
+
+def test_directory_entries_and_symlinks(tmp_path, adapter):
+    members = dict(base_members(), **{"pkg/": b"", "pkg/mod.py": b""})
+    artifact.check(write_zip(tmp_path / "dirs.zip", members), adapter)
+    link = zipfile.ZipInfo("link.py")
+    link.external_attr = (0o120777) << 16
+    with zipfile.ZipFile(write_zip(tmp_path / "link.zip", base_members()), "a") as bundle:
+        bundle.writestr(link, "handler.py")
+    assert code_of(artifact.check, tmp_path / "link.zip", adapter) == "UNSAFE_MEMBER"
+
+
+def test_corrupt_member_is_coded(tmp_path, adapter, good_zip):
+    data = bytearray(good_zip.read_bytes())
+    payload = elf()
+    at = data.find(payload)
+    data[at + 30] ^= 0xFF  # inside the stored .so body: a CRC failure on read
+    bad = tmp_path / "crc.zip"
+    bad.write_bytes(bytes(data))
+    assert code_of(artifact.check, bad, adapter) == "UNREADABLE_ZIP"
+    assert code_of(extract, bad, tmp_path / "out") == "UNREADABLE_ZIP"
+
+
+def test_extract_refuses_duplicates(tmp_path):
+    bad = mutate(tmp_path, duplicates=[("handler.py", b"")])
+    assert code_of(extract, bad, tmp_path / "out") == "DUPLICATE_MEMBER"
+
+
+def test_backstop_pattern_appears_exactly_once(tmp_path):
+    line = f"grep -E '{backstop.SECRET_FILE_PATTERN}'\n"
+    script = tmp_path / "check.sh"
+    script.write_text(line)
+    backstop.check_script(script)
+    script.write_text(line + line)
+    assert code_of(backstop.check_script, script) == "BACKSTOP_DRIFT"
+    script.write_text(line + "grep -E '.env'\n")
+    assert code_of(backstop.check_script, script) == "BACKSTOP_DRIFT"
+    assert code_of(backstop.check_script, tmp_path / "missing.sh") == "BACKSTOP_DRIFT"
+
+
+def test_adapter_paths_and_limits(tmp_path, repo, adapter):
+    assert code_of(adapter.file, "../outside.txt") == "ADAPTER_CONFIG"
+    path = repo / "lambda-validation.toml"
+    for limit in ("0", str(250 * 1024 * 1024 + 1)):
+        path.write_text(ADAPTER.replace("[zip]\n", f"[zip]\nuncompressed_limit = {limit}\n"))
+        assert code_of(Adapter, path) == "ADAPTER_CONFIG"
+    path.write_text(ADAPTER + '[dependencies.test_only]\npytest = ["pytest"]\n')
+    assert code_of(Adapter, path) == "ADAPTER_CONFIG"
+    path.write_text(ADAPTER.replace('roots = "requirements.in"', 'roots = "requirements.in"\ntest_lock = "t.txt"'))
+    assert code_of(Adapter, path) == "ADAPTER_CONFIG"
+    path.write_text(ADAPTER.replace('python_full_version = "3.12.16"', 'python_full_version = "3.12"'))
+    assert code_of(Adapter, path) == "ADAPTER_CONFIG"
+
+
+def test_an_artifact_with_no_extension_fails_by_default(tmp_path, repo):
+    path = repo / "lambda-validation.toml"
+    path.write_text(ADAPTER.replace("extensions = 1\n", ""))
+    bare = mutate(tmp_path, drop=["helper/_speed.cpython-312-x86_64-linux-gnu.so"])
+    with pytest.raises(ValidationError, match="no native extensions") as caught:
+        artifact.check(bare, Adapter(path))
+    assert caught.value.code == "NATIVE_EXPECTED"
+    path.write_text(ADAPTER.replace("extensions = 1\n", "require_any = false\n"))
+    artifact.check(bare, Adapter(path))
+
+
+@pytest.mark.parametrize(
+    "dist_info, text",
+    [
+        ("helper-2.1.0.dist-info/METADATA", b"Metadata-Version: 2.1\nVersion: 2.1.0\n"),
+        ("helper-2.1.0.dist-info/METADATA", metadata("helper", "2.1.0", ["not a requirement !!"])),
+        ("helper-2.1.0.dist-info/METADATA", metadata("helper", "2.1.0", requires_python="not-a-spec")),
+        ("helper-2.1.0.dist-info/METADATA", metadata("helper", "two")),
+    ],
+)
+def test_malformed_metadata_is_coded(tmp_path, adapter, dist_info, text):
+    assert code_of(artifact.check, mutate(tmp_path, {dist_info: text}), adapter) == "METADATA_INVALID"
+
+
+def test_versioned_egg_info_counts_as_its_distribution():
+    from nui_lambda_validation.metadata import test_only
+
+    production = {"app-lib": "1.0.0"}
+    joint = dict(production, pytest="8.4.2")
+    mapping = {"pytest": ["pytest"]}
+    for leaked in (
+        "pytest-8.4.2-py3.12.egg-info/PKG-INFO",
+        "pytest.egg-info/PKG-INFO",
+        "pytest-8.4.2.dist-info/RECORD",
+    ):
+        assert code_of(test_only, [leaked], production, joint, mapping) == "TEST_ONLY_LEAK"
+
+
+def test_root_markers_select_roots(tmp_path, repo, good_zip):
+    adapter = _roots_only(repo, "app-lib>=1\nboto3>=1.34\nold-only>=1; python_version < '3.12'\n")
+    artifact.check(good_zip, adapter)
+    adapter = _roots_only(repo, "app-lib>=1\nboto3>=1.34\nx86-only>=1; platform_machine == 'x86_64'\n")
+    assert code_of(artifact.check, good_zip, adapter) == "CLOSURE_ROOT"
+
+
+def test_prerelease_satisfies_a_matching_range_as_pip_does(tmp_path, repo):
+    adapter = _roots_only(repo, "app-lib>=1\nboto3>=1.34\n")
+    members = base_members()
+    del members["helper-2.1.0.dist-info/METADATA"]
+    members["helper-2.2.0rc1.dist-info/METADATA"] = metadata("helper", "2.2.0rc1", requires_python=">=3.9")
+    artifact.check(write_zip(tmp_path / "rc.zip", members), adapter)
+
+
+def test_accepted_majors_shape(repo, good_zip):
+    adapter = _roots_only(repo, "app-lib>=1\nboto3>=1.34\n", {"helper": "2"})
+    assert code_of(artifact.check, good_zip, adapter) == "ADAPTER_CONFIG"
+    (repo / "majors.json").write_text("not json")
+    assert code_of(artifact.check, good_zip, adapter) == "ADAPTER_CONFIG"
+
+
+def test_negatives_under_roots_only_and_test_only(tmp_path, repo, good_zip):
+    results = negatives.run(good_zip, _roots_only(repo, "app-lib>=1\nboto3>=1.34\n"), tmp_path / "ro")
+    assert results["metadata-removed"]["code"] == "CLOSURE_MISSING"
+    assert "version-substituted" not in results
+    (repo / "requirements-test.txt").write_text(PINS_TEST)
+    (repo / "lambda-validation.toml").write_text(
+        ADAPTER + 'test_lock = "requirements-test.txt"\n[dependencies.test_only]\npytest = ["pytest", "_pytest"]\n'
+    )
+    results = negatives.run(good_zip, Adapter(repo / "lambda-validation.toml"), tmp_path / "to")
+    assert results["test-only-leak-pytest"]["code"] == "TEST_ONLY_LEAK"
+
+
+def test_not_applicable_is_exact_and_recorded(tmp_path, repo, good_zip):
+    path = repo / "lambda-validation.toml"
+    path.write_text(ADAPTER + '[negatives.not_applicable]\nduplicate = "the packager dedupes"\n')
+    results = negatives.run(good_zip, Adapter(path), tmp_path / "n1")
+    assert "duplicate" not in results
+    record = json.loads((tmp_path / "n1" / "negative-controls.json").read_text())
+    assert record["not_applicable"] == {"duplicate": "the packager dedupes"}
+    path.write_text(ADAPTER + '[negatives.not_applicable]\nduplicat = "typo"\n')
+    assert code_of(negatives.run, good_zip, Adapter(path), tmp_path / "n2") == "ADAPTER_CONFIG"
+    # sdk-removed cannot be built without an SDK path in [zip] required, and must be declared.
+    path.write_text(ADAPTER.replace('required = ["handler.py", "boto3/__init__.py"]', 'required = ["handler.py"]'))
+    assert code_of(negatives.run, good_zip, Adapter(path), tmp_path / "n3") == "ADAPTER_CONFIG"
+    path.write_text(
+        ADAPTER.replace('required = ["handler.py", "boto3/__init__.py"]', 'required = ["handler.py"]')
+        + '[negatives.not_applicable]\nsdk-removed = "runtime-provided SDK baseline"\n'
+    )
+    assert "sdk-removed" not in negatives.run(good_zip, Adapter(path), tmp_path / "n4")
+
+
+def test_version_substitution_must_touch_metadata_and_module(tmp_path, adapter):
+    members = base_members()
+    members["botocore/__init__.py"] = b"VERSION = 'elsewhere'\n"
+    source = write_zip(tmp_path / "noversion.zip", members)
+    assert code_of(negatives._substitute, source, tmp_path / "m.zip", "botocore-1.44.1.dist-info/METADATA") == (
+        "NEGATIVE_INEFFECTIVE"
+    )

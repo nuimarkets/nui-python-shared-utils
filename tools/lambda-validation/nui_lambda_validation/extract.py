@@ -1,10 +1,11 @@
 """Extract a ZIP and prove the tree on disk is exactly its members, byte for byte."""
 
 import hashlib
+import zipfile
 from pathlib import Path
 
 from .errors import fail
-from .zipcheck import member_safety, open_zip
+from .zipcheck import member_safety, open_zip, read_member
 
 
 def extract(archive, destination):
@@ -14,8 +15,11 @@ def extract(archive, destination):
     with open_zip(archive) as bundle:
         infos = [info for info in bundle.infolist() if not info.is_dir()]
         member_safety([info.filename for info in infos])
-        expected = {info.filename: hashlib.sha256(bundle.read(info)).hexdigest() for info in infos}
-        bundle.extractall(destination)
+        expected = {info.filename: hashlib.sha256(read_member(bundle, info)).hexdigest() for info in infos}
+        try:
+            bundle.extractall(destination)
+        except (OSError, zipfile.BadZipFile, NotImplementedError) as error:
+            fail("UNREADABLE_ZIP", f"{archive}: extraction failed: {error}")
     actual = {
         path.relative_to(destination).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in destination.rglob("*")

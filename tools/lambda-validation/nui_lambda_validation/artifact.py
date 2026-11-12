@@ -4,6 +4,7 @@ import json
 
 from . import native, zipcheck
 from .config import Adapter
+from .errors import fail
 from .metadata import (
     check_majors,
     closure,
@@ -15,12 +16,11 @@ from .metadata import (
 )
 
 
-def check(archive, adapter: Adapter, dependency_files=None):
-    """Member checks, native checks, then metadata. ``dependency_files`` overrides the adapter's
-    pins/roots paths (a baseline built from another lock)."""
+def check(archive, adapter: Adapter):
+    """Member checks, native checks, then metadata."""
     target = adapter.target
     report = zipcheck.inspect(archive, adapter.get("zip"))
-    deps = dict(adapter.require("dependencies"), **(dependency_files or {}))
+    deps = adapter.require("dependencies")
     with zipcheck.open_zip(archive) as bundle:
         report["native"] = native.inspect(bundle, target["python"], target["machine"], adapter.get("native"))
         distributions = zip_distributions(bundle)
@@ -29,7 +29,12 @@ def check(archive, adapter: Adapter, dependency_files=None):
         environment = target_environment(target["python_full_version"], target["machine"])
         report["closure"] = closure(distributions, roots, environment, pins)
         if deps.get("accepted_majors"):
-            check_majors(distributions, json.loads(adapter.file(deps["accepted_majors"]).read_text()))
+            path = adapter.file(deps["accepted_majors"])
+            try:
+                accepted = json.loads(path.read_text())
+            except (OSError, ValueError) as error:
+                fail("ADAPTER_CONFIG", f"{path}: {error}")
+            check_majors(distributions, accepted)
         if deps.get("test_lock"):
             joint = read_pins(adapter.file(deps["test_lock"]))
             report["test_only_exclusions"] = test_only(
