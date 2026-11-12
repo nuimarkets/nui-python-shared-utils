@@ -16,6 +16,8 @@ LAMBDA_UNZIPPED_LIMIT = 250 * 1024 * 1024
 TOOL_PACKAGE = "nui_lambda_validation"
 # Validation-only files an adapter keeps in its repository. None may ship.
 TOOL_FILES = ("lambda-validation.toml", "requirements-validation.txt")
+# Distribution metadata directories (`nui_lambda_validation-0.1.0.dist-info`, `.egg-info`).
+TOOL_DIST_PREFIXES = tuple(f"{name}{sep}" for name in (TOOL_PACKAGE, "nui-lambda-validation") for sep in "-.")
 
 
 def open_zip(archive):
@@ -62,15 +64,20 @@ def _forbidden(name, rules):
     return None
 
 
+def _tool_member(name):
+    """Validation-only material at any depth: the package, its venv, its dist-info or
+    egg-info under either spelling, or an adapter file."""
+    parts = PurePosixPath(name).parts
+    if parts and parts[-1] in TOOL_FILES:
+        return True
+    return any(
+        part in (TOOL_PACKAGE, ".venv-validation") or part.startswith(TOOL_DIST_PREFIXES) for part in parts
+    )
+
+
 def forbidden_paths(names, rules):
     hits = [f"{name} ({why})" for name in names if (why := _forbidden(name, rules))]
-    tool = [
-        name
-        for name in names
-        if PurePosixPath(name).parts[0] in (TOOL_PACKAGE, ".venv-validation")
-        or PurePosixPath(name).name in TOOL_FILES
-        or PurePosixPath(name).parts[0].startswith("nui_lambda_validation-")
-    ]
+    tool = [name for name in names if _tool_member(name)]
     if tool:
         fail("TOOL_IN_ARTIFACT", ", ".join(tool[:10]))
     if hits:

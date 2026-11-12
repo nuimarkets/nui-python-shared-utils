@@ -322,3 +322,20 @@ def test_extraction_mismatch_detected(tmp_path, good_zip, monkeypatch):
         extract(good_zip, tmp_path / "out")
     assert caught.value.code == "EXTRACTION_MISMATCH"
     assert "stray.py" in caught.value.detail and "handler.py" in caught.value.detail
+
+
+@pytest.mark.parametrize(
+    "member",
+    [
+        "nui_lambda_validation/__init__.py",
+        "vendor/nui_lambda_validation/__init__.py",
+        "vendor/.venv-validation/pyvenv.cfg",
+        "nui_lambda_validation-0.1.0.dist-info/METADATA",
+        "vendor/nui_lambda_validation-0.1.0.dist-info/METADATA",
+        "lib/nui_lambda_validation.egg-info/PKG-INFO",
+        "conf/lambda-validation.toml",
+        "requirements-validation.txt",
+    ],
+)
+def test_validator_material_rejected_at_any_depth(tmp_path, adapter, member):
+    assert code_of(artifact.check, mutate(tmp_path, {member: b""}), adapter) == "TOOL_IN_ARTIFACT"
