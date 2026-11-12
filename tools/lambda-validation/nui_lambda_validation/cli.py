@@ -44,15 +44,27 @@ def verify(adapter, output, stages=None, keep_extracted=False):
     if output.is_relative_to(adapter.root) or output.exists():
         fail("BUILD", f"output must be new and outside the checkout: {output}")
     output.mkdir(parents=True)
-    spec = adapter.require("build")
-    box = adapter.require("container")
-    stages = stages or spec["stages"]
     home = output / "home"
     home.mkdir()
     tree = output / "source"
     manifest = build.committed_source(adapter.root, tree)
+    # Every verification input (this adapter, its locks, its smoke script) comes from the
+    # committed tree, so an uncommitted edit cannot weaken a run the manifest attributes to HEAD.
+    # Only the serverless binary comes from the checkout, through its node_modules.
+    committed_path = tree / adapter.path.name
+    if not committed_path.is_file():
+        fail("BUILD", f"{adapter.path.name} is not committed at {manifest['head']}")
+    checkout, adapter = adapter, Adapter(committed_path)
+    spec = adapter.require("build", ("stages", "config_path", "config_text"))
+    box = adapter.require("container", ("image", "smoke"))
+    if not spec["stages"]:
+        fail("ADAPTER_CONFIG", "[build] stages is empty, so nothing would be built or checked")
+    unknown = sorted(set(stages or ()) - set(spec["stages"]))
+    if unknown:
+        fail("ADAPTER_CONFIG", f"stages not in [build] stages: {unknown}")
+    stages = stages or spec["stages"]
     files = {spec["config_path"].format(stage=stage): spec["config_text"] for stage in spec["stages"]}
-    build.prepare(tree, adapter.root, spec.get("substitutions", []), files)
+    build.prepare(tree, checkout.root, spec.get("substitutions", []), files)
     env = build.clean_env(home)
     deps = adapter.require("dependencies")
     proof = output / "proof"
@@ -60,15 +72,15 @@ def verify(adapter, output, stages=None, keep_extracted=False):
     if deps["mode"] == "exact":
         (proof / "pins.json").write_text(json.dumps(read_pins(adapter.file(deps["pins"])), indent=2) + "\n")
     image = box["image"]
-    manifest.update(image=image, image_digests=container.image_digests(image), artifacts=[])
+    manifest.update(
+        image=image,
+        image_digests=container.image_digests(image),
+        build_images={name: container.image_digests(name) for name in spec.get("build_images", [])},
+        artifacts=[],
+    )
+    serverless = checkout.file(spec.get("serverless", "node_modules/.bin/serverless"))
     for index, stage in enumerate(stages):
-        archive, template = build.package(
-            tree,
-            stage,
-            adapter.file(spec.get("serverless", "node_modules/.bin/serverless")),
-            env,
-            output / f"build-{stage}.log",
-        )
+        archive, template = build.package(tree, stage, serverless, env, output / f"build-{stage}.log")
         backstop.secret_scan(archive.parent)
         report = artifact.check(archive, adapter)
         with open_zip(archive) as bundle:

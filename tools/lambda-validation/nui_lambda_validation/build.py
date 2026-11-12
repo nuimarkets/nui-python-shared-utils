@@ -27,12 +27,16 @@ def clean_env(home, extra=None):
     return env
 
 
-def committed_source(root, destination, rev="HEAD"):
-    """Extract ``git archive <rev>`` into a new ``destination``; return the head and archive hash."""
+def committed_source(root, destination, rev="HEAD") -> dict:
+    """Extract ``git archive <rev>`` into a new ``destination``; return the head and archive hash.
+    ``root`` must be the repository's top level, where the adapter lives."""
     root = Path(root).resolve()
     destination = Path(destination).resolve()
     if destination.is_relative_to(root) or destination.exists():
         fail("BUILD", f"destination must be new and outside the checkout: {destination}")
+    top = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    if top.returncode != 0 or Path(top.stdout.strip()).resolve() != root:
+        fail("BUILD", f"the adapter must sit at the top of a git repository: {root}")
     head = subprocess.check_output(["git", "-C", str(root), "rev-parse", rev], text=True).strip()
     archive = subprocess.check_output(["git", "-C", str(root), "archive", head])
     destination.mkdir(parents=True)

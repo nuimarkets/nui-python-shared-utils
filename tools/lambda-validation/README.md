@@ -37,7 +37,7 @@ Every failure exits 1 and prints `CODE: detail` on stderr. Codes are listed in
 
 | Command | What it does |
 | --- | --- |
-| `verify --config lambda-validation.toml --output DIR` | Builds every stage from `git archive HEAD` with synthetic configuration, then per stage: secret scan, `check-zip`, extraction proof, the adapter's smoke script in the Lambda image, `pip check` in the image; the first stage also runs `negatives`. Copies each compiled template out for the repository's own assertions. `DIR` must be new and outside the checkout |
+| `verify --config lambda-validation.toml --output DIR` | Builds every stage from `git archive HEAD` with synthetic configuration, then per stage: secret scan, `check-zip`, extraction proof, the adapter's smoke script in the Lambda image, `pip check` in the image; the first stage also runs `negatives`. The adapter, its lock files and its smoke script are read from the committed tree, never the working copy, and the adapter must sit at the repository's top level. Records the digests of the runtime image and of every `build_images` entry. Copies each compiled template out for the repository's own assertions. `DIR` must be new and outside the checkout |
 | `check-zip ZIP --config ...` | Member safety, secrets, exclusions, required paths, size, native ABI/ELF, dependency pins and closure, test-only leaks, optional major drift |
 | `negatives ZIP --config ... --output DIR` | Mutates the ZIP once per standard defect and once per configured exclusion rule; fails unless each mutant is rejected with its intended code |
 | `extract ZIP DIR` | Extracts and proves the files on disk are exactly the members, byte for byte |
@@ -47,6 +47,8 @@ Every failure exits 1 and prints `CODE: detail` on stderr. Codes are listed in
 | `self-check --requirement FILE` | Fails unless the installed tool came from the pinned commit |
 
 ## Adapter: `lambda-validation.toml`
+
+Every section, key and value type below is checked when the file is read, nested tables included: an unknown or misspelled key fails as `ADAPTER_CONFIG` rather than silently dropping the check it configures. `verify` also needs `[build]` `stages` (non-empty), `config_path` and `config_text`, and `[container]` `image` and `smoke`.
 
 ```toml
 [target]
@@ -68,6 +70,7 @@ root_suffixes = [".md"]           # endings of top-level files only
 extensions = 10                   # optional exact count of CPython extension modules
 require = ["yaml/_yaml.cpython-312-x86_64-linux-gnu.so"]
 plain_libraries = ["vendor.libs/libfoo-1a2b.so.1"]   # shared objects with no ABI tag
+# require_any = false            # default true: a ZIP with no CPython extension fails
 
 [dependencies]
 mode = "exact"                    # or "roots-only" for range requirements
@@ -86,11 +89,15 @@ plugins = ["pytest_mock", "pytest_cov"]   # autoload is off; list every plugin t
 args = ["tests"]
 allowed_skips = []                         # exact node ids; any other skip fails the run
 passthrough_env = []
+[offline.not_loaded]                       # installed pytest11 plugins deliberately not loaded
+# anyio = "suite has no async tests"
 [offline.env]
 
 [build]
 stages = ["dev", "training", "prod"]
+build_images = ["public.ecr.aws/sam/build-python3.12:latest-x86_64"]  # digests recorded; must be local
 config_path = "config/env-{stage}.yml"
+# serverless = "node_modules/.bin/serverless"   # default, resolved in the checkout
 config_text = """SYNTHETIC: value
 """
 [[build.substitutions]]

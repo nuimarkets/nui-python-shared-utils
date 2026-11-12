@@ -70,9 +70,7 @@ def _tool_member(name):
     parts = PurePosixPath(name).parts
     if parts and parts[-1] in TOOL_FILES:
         return True
-    return any(
-        part in (TOOL_PACKAGE, ".venv-validation") or part.startswith(TOOL_DIST_PREFIXES) for part in parts
-    )
+    return any(part in (TOOL_PACKAGE, ".venv-validation") or part.startswith(TOOL_DIST_PREFIXES) for part in parts)
 
 
 def forbidden_paths(names, rules):

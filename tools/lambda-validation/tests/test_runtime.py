@@ -197,3 +197,23 @@ def test_sdk_module_imported_from_outside_the_artifact(tmp_path):
     body = f"sys.path.insert(0, {str(shadow.parent)!r}); runtime.check_sdk('owned', root=root)"
     out = run_host(root, body)
     assert "CODE SDK_PROVENANCE" in out and "imported from" in out
+
+
+def test_every_code_raised_is_declared():
+    """The runtime module raises its own error type, so nothing validates its codes at raise time."""
+    import ast
+
+    from nui_lambda_validation.errors import CODES
+
+    package = Path(runtime.__file__).parent
+    raised = set()
+    for source in package.glob("*.py"):
+        for node in ast.walk(ast.parse(source.read_text())):
+            if (
+                isinstance(node, ast.Call)
+                and getattr(node.func, "id", None) in ("fail", "_fail")
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+            ):
+                raised.add(node.args[0].value)
+    assert raised and raised <= CODES, sorted(raised - CODES)
