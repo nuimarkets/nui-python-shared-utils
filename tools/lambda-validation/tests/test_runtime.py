@@ -219,26 +219,53 @@ def test_every_code_raised_is_declared():
     assert raised and raised <= CODES, sorted(raised - CODES)
 
 
-def _extension_module():
-    """A stdlib extension module shipped as a file, to copy into a fake task root."""
-    import importlib.util
+NATIVE_SMOKE = """
+import sys
+sys.path.insert(0, "/var/task")
+from nui_lambda_validation import runtime
+try:
+    runtime.check_native(sys.argv[1:])
+except runtime.RuntimeCheckError as error:
+    print("CODE", error.code)
+else:
+    print("OK")
+"""
 
-    for name in ("_bz2", "_lzma", "_ctypes", "_decimal", "_ssl"):
-        spec = importlib.util.find_spec(name)
-        if spec and spec.origin and spec.origin.endswith(".so"):
-            return name, Path(spec.origin)
-    raise AssertionError("no stdlib extension module found as a file")
 
-
-def test_check_native_imports_from_the_artifact_with_this_abi(tmp_path):
-    name, origin = _extension_module()
+def test_check_native_imports_from_the_artifact_with_this_abi(tmp_path, image):
+    # A real extension module, taken from the image itself so its ABI matches the interpreter.
+    name = "_csv.cpython-312-x86_64-linux-gnu.so"
+    data = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--entrypoint",
+            "/bin/cat",
+            IMAGE,
+            f"/var/lang/lib/python3.12/lib-dynload/{name}",
+        ],
+        capture_output=True,
+        check=True,
+    ).stdout
     root = fake_root(tmp_path / "task")
-    tag = f"cpython-{sys.version_info.major}{sys.version_info.minor}"
-    shutil.copy(origin, root / f"{name}.{tag}-x86_64-linux-gnu.so")
-    assert "OK" in run_host(root, f"runtime.check_native([{name!r}], root=root)")
-    assert "CODE NATIVE_EXPECTED" in run_host(root, "runtime.check_native(['boto3'], root=root)")
-    (root / f"{name}.{tag}-x86_64-linux-gnu.so").rename(root / f"{name}.so")
-    assert "CODE NATIVE_ABI" in run_host(root, f"runtime.check_native([{name!r}], root=root)")
+    (root / "vendored").mkdir()
+    (root / "vendored" / "__init__.py").write_text("")
+    (root / "vendored" / name).write_bytes(data)
+    script = tmp_path / "native.py"
+    script.write_text(NATIVE_SMOKE)
+
+    def check(*modules):
+        command = container.argv(IMAGE, root, "x86_64", script=script, args=modules)
+        result = subprocess.run(command, capture_output=True, text=True)
+        return result.stdout + result.stderr
+
+    assert "OK" in check("vendored._csv")
+    assert "CODE NATIVE_EXPECTED" in check("boto3")  # not a shared object
+    (root / "vendored" / name).rename(root / "vendored" / "_csv.so")
+    assert "CODE NATIVE_ABI" in check("vendored._csv")  # loads, but carries no cpython-312 or abi3 tag
 
 
 def test_inventory_duplicates_constraints_and_manifest(tmp_path):
