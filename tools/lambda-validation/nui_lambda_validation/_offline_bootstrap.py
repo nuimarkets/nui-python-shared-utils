@@ -65,6 +65,10 @@ def main():
         sys.version.split()[0],
         "SOURCE",
         policy["root"],
+        "INSTALLED_PLUGINS",
+        plugins,
+        "LOADED",
+        policy["plugins"],
         flush=True,
     )
     import pytest

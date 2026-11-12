@@ -49,7 +49,7 @@ def run_host(root, body):
         try:
         {textwrap.indent(textwrap.dedent(body), '    ')}
         except runtime.RuntimeCheckError as error:
-            print("CODE", error.code)
+            print("CODE", error.code, error)
             raise SystemExit(1)
         print("OK")
         """
@@ -186,3 +186,14 @@ def test_container_runtime_module_on_older_image(tmp_path, image):
     result = subprocess.run(command, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert "PINS 3" in result.stdout
+
+
+def test_sdk_module_imported_from_outside_the_artifact(tmp_path):
+    # Metadata in the artifact, module code shadowed from elsewhere: only the module-file check catches it.
+    root = fake_root(tmp_path / "task")
+    shadow = tmp_path / "shadow" / "botocore"
+    shadow.mkdir(parents=True)
+    (shadow / "__init__.py").write_text("__version__ = '1.44.1'\n")
+    body = f"sys.path.insert(0, {str(shadow.parent)!r}); runtime.check_sdk('owned', root=root)"
+    out = run_host(root, body)
+    assert "CODE SDK_PROVENANCE" in out and "imported from" in out

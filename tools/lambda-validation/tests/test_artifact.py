@@ -2,6 +2,7 @@
 
 import json
 import zipfile
+from pathlib import Path
 
 import pytest
 from conftest import ADAPTER, base_members, elf, metadata, mutate, write_zip
@@ -287,3 +288,37 @@ def test_unreadable_zip(tmp_path, adapter):
     bad.write_bytes(b"PK\x03\x04 truncated")
     assert code_of(artifact.check, bad, adapter) == "UNREADABLE_ZIP"
     assert zipfile.is_zipfile(tmp_path / "bad.zip") is False
+
+
+def test_elf_class_checked_independently_of_machine(tmp_path, adapter):
+    # ELF32 header that still carries x86_64 (62) at the e_machine offset: only the class check rejects it.
+    header = bytearray(b"\x7fELF\x01\x01\x01" + b"\x00" * 13)
+    header[18:20] = (62).to_bytes(2, "little")
+    bad = mutate(tmp_path, {"other.cpython-312-x86_64-linux-gnu.so": bytes(header) + b"\x00" * 44})
+    assert code_of(artifact.check, bad, adapter) == "NATIVE_ELF"
+    not_elf = bytearray(b"MZ" + b"\x00" * 18)
+    not_elf[18:20] = (62).to_bytes(2, "little")
+    bad = mutate(tmp_path, {"other.cpython-312-x86_64-linux-gnu.so": bytes(not_elf)})
+    assert code_of(artifact.check, bad, adapter) == "NATIVE_ELF"
+
+
+def test_extension_count_is_exact(tmp_path, adapter):
+    extra = mutate(tmp_path, {"helper/_more.cpython-312-x86_64-linux-gnu.so": elf()})
+    with pytest.raises(ValidationError, match="2 extensions, expected 1") as caught:
+        artifact.check(extra, adapter)
+    assert caught.value.code == "NATIVE_EXPECTED"
+
+
+def test_extraction_mismatch_detected(tmp_path, good_zip, monkeypatch):
+    original = zipfile.ZipFile.extractall
+
+    def tampering(self, path=None, *args, **kwargs):
+        original(self, path, *args, **kwargs)
+        (Path(path) / "handler.py").write_text("tampered\n")
+        (Path(path) / "stray.py").write_text("")
+
+    monkeypatch.setattr(zipfile.ZipFile, "extractall", tampering)
+    with pytest.raises(ValidationError) as caught:
+        extract(good_zip, tmp_path / "out")
+    assert caught.value.code == "EXTRACTION_MISMATCH"
+    assert "stray.py" in caught.value.detail and "handler.py" in caught.value.detail
