@@ -7,6 +7,8 @@ recursive-include nui_shared_utils *.py
 recursive-include nui_shared_utils/slack_setup *.yaml
 
 # Exclude development and build files
+# tools/ holds separately versioned build-time packages, never part of this distribution
+prune tools
 exclude .gitignore
 exclude .github
 recursive-exclude * __pycache__
