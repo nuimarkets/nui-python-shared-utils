@@ -1,5 +1,6 @@
 """Distribution metadata inside a ZIP: exact pins, target-marker closure, test-only leaks."""
 
+import re
 from email.parser import BytesParser
 from pathlib import PurePosixPath
 
@@ -67,8 +68,22 @@ def _requirement(raw, where):
 
 
 def _contains(specifier, version):
-    """pip's own rule (``pip check``): an installed prerelease satisfies a matching range."""
-    return SpecifierSet(str(specifier)).contains(Version(version), prereleases=True)
+    """Strict, as the source checks were: a prerelease never satisfies a range. Explicit,
+    because packaging's default for ``in`` differs between the host's packaging and the
+    image's vendored copy."""
+    return SpecifierSet(str(specifier)).contains(Version(version), prereleases=False)
+
+
+def _dist_name(directory):
+    """``<name>-<version>.dist-info`` or ``<name>[-<version>[-pyX.Y]].egg-info`` -> name. The
+    version is the last dash-separated part that starts with a digit, so a non-normalized
+    hyphenated name (``pytest-cov-6.0.0.dist-info``) keeps all of itself."""
+    stem = directory.rsplit(".", 1)[0]
+    if directory.endswith(".egg-info"):
+        stem = re.sub(r"-py\d+(?:\.\d+)*$", "", stem)
+    if re.search(r"-\d[^-]*$", stem):
+        stem = stem.rsplit("-", 1)[0]
+    return canonicalize_name(stem)
 
 
 def zip_distributions(bundle):
@@ -210,8 +225,7 @@ def test_only(names, production, joint, mapping):
         if root in forbidden:
             hits.append(name)
         elif root.endswith((".dist-info", ".egg-info")):
-            # `<name>-<version>[-pyX.Y].egg-info`: the name is everything before the first dash.
-            dist = canonicalize_name(root.rsplit(".", 1)[0].split("-", 1)[0])
+            dist = _dist_name(root)
             if dist in exclusive:
                 hits.append(name)
     if hits:

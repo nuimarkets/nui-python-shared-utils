@@ -112,7 +112,7 @@ def check_sdk(mode, root=TASK_ROOT, names=SDK):
         req = _requirement(raw)
         if _normalize(req.name) in wanted and (req.marker is None or req.marker.evaluate({"extra": ""})):
             version = metadata.version(req.name)
-            if not req.specifier.contains(version, prereleases=True):  # pip check's rule
+            if not req.specifier.contains(version, prereleases=False):  # strict, as on the host
                 _fail("SDK_CONSTRAINT", f"{names[0]} requires {req}, artifact has {version}")
     return report
 
@@ -168,7 +168,7 @@ def check_inventory(pins=None, root=TASK_ROOT, manifest=None):
             dependency = _normalize(req.name)
             if dependency not in installed:
                 _fail("CLOSURE_MISSING", f"{name} requires {req}, absent from artifact")
-            if not req.specifier.contains(Version(installed[dependency].version), prereleases=True):
+            if not req.specifier.contains(Version(installed[dependency].version), prereleases=False):
                 _fail("CLOSURE_DEPENDENCY", f"{name} requires {req}, artifact has {installed[dependency].version}")
     if manifest is not None:
         seen = {name: {"version": d.version, "requires": d.requires or []} for name, d in installed.items()}

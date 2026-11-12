@@ -297,6 +297,7 @@ class FakeDistribution:
         ("# pinned for CI\n" + LINE.format(SHA), json.dumps({"vcs_info": {"commit_id": SHA}}), None, "ok"),
         (LINE.format(SHA), json.dumps({"vcs_info": {"commit_id": "f" * 40}}), None, "SELF_CHECK"),
         (LINE.format(SHA), None, None, "SELF_CHECK"),
+        (LINE.format(SHA), "not json", None, "SELF_CHECK"),
         (LINE.format(SHA[:12]), json.dumps({"vcs_info": {"commit_id": SHA}}), None, "SELF_CHECK"),
         (LINE.format(SHA) * 2, json.dumps({"vcs_info": {"commit_id": SHA}}), None, "SELF_CHECK"),
         (LINE.format(SHA), json.dumps({"vcs_info": {"commit_id": SHA}}), "/elsewhere/cli.py", "SELF_CHECK"),

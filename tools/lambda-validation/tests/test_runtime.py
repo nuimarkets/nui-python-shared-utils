@@ -317,7 +317,8 @@ def test_tool_metadata_beside_the_mount_or_importable(tmp_path):
     (info / "METADATA").write_text("Metadata-Version: 2.1\nName: nui-lambda-validation\nVersion: 0.1.0\n")
     assert "CODE TOOL_IN_ARTIFACT" in isolated(root)
     shutil.rmtree(info)
-    (mount / "nui_lambda_validation-0.1.0.dist-info").mkdir()
+    # Any distribution metadata beside the mount, not only the tool's own name.
+    (mount / "unrelated-1.0.dist-info").mkdir()
     assert "CODE TOOL_IN_ARTIFACT" in isolated(root)
 
 
@@ -333,3 +334,12 @@ def test_container_pip_check_sees_the_artifact(tmp_path, image):
     assert pip_check(consistent).returncode == 0
     result = pip_check(broken)
     assert result.returncode != 0 and "botocore" in result.stdout + result.stderr
+
+
+def test_inventory_rejects_a_prerelease_in_a_range(tmp_path):
+    root = fake_root(tmp_path / "task")
+    shutil.rmtree(root / "s3transfer-0.19.3.dist-info")
+    info = root / "s3transfer-0.19.4rc1.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_bytes(metadata("s3transfer", "0.19.4rc1"))
+    assert "CODE CLOSURE_DEPENDENCY" in run_host(root, "runtime.check_inventory(None, root=root)")

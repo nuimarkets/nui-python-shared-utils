@@ -37,7 +37,10 @@ def self_check(requirement):
     if Path(str(dist.locate_file("nui_lambda_validation/cli.py"))).resolve() != Path(__file__).resolve():
         fail("SELF_CHECK", f"running {__file__}, not the installed distribution's copy")
     raw = dist.read_text("direct_url.json")
-    commit = json.loads(raw or "{}").get("vcs_info", {}).get("commit_id")
+    try:
+        commit = json.loads(raw or "{}").get("vcs_info", {}).get("commit_id")
+    except (ValueError, AttributeError) as error:
+        fail("SELF_CHECK", f"unreadable direct_url.json: {error}")
     if commit != match.group(1):
         fail("SELF_CHECK", f"installed from {commit}, requirement pins {match.group(1)}")
     return {"commit": commit}

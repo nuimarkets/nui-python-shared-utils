@@ -400,6 +400,9 @@ def test_adapter_paths_and_limits(tmp_path, repo, adapter):
     assert code_of(Adapter, path) == "ADAPTER_CONFIG"
     path.write_text(ADAPTER.replace('python_full_version = "3.12.16"', 'python_full_version = "3.12"'))
     assert code_of(Adapter, path) == "ADAPTER_CONFIG"
+    # Matches the X.Y prefix, so only the version-format check rejects it.
+    path.write_text(ADAPTER.replace('python_full_version = "3.12.16"', 'python_full_version = "3.12.16rc1"'))
+    assert code_of(Adapter, path) == "ADAPTER_CONFIG"
 
 
 def test_an_artifact_with_no_extension_fails_by_default(tmp_path, repo):
@@ -438,6 +441,11 @@ def test_versioned_egg_info_counts_as_its_distribution():
         "pytest-8.4.2.dist-info/RECORD",
     ):
         assert code_of(test_only, [leaked], production, joint, mapping) == "TEST_ONLY_LEAK"
+    # A non-normalized hyphenated name keeps every part before the version.
+    joint = dict(production, **{"pytest-cov": "6.0.0"})
+    mapping = {"pytest-cov": ["pytest_cov"]}
+    for leaked in ("pytest-cov-6.0.0.dist-info/RECORD", "pytest_cov-6.0.0.dist-info/RECORD"):
+        assert code_of(test_only, [leaked], production, joint, mapping) == "TEST_ONLY_LEAK"
 
 
 def test_root_markers_select_roots(tmp_path, repo, good_zip):
@@ -447,12 +455,18 @@ def test_root_markers_select_roots(tmp_path, repo, good_zip):
     assert code_of(artifact.check, good_zip, adapter) == "CLOSURE_ROOT"
 
 
-def test_prerelease_satisfies_a_matching_range_as_pip_does(tmp_path, repo):
+def test_a_prerelease_never_satisfies_a_range(tmp_path, repo):
+    # Strict, as the source checks were, whatever packaging's default for `in` is.
     adapter = _roots_only(repo, "app-lib>=1\nboto3>=1.34\n")
     members = base_members()
     del members["helper-2.1.0.dist-info/METADATA"]
     members["helper-2.2.0rc1.dist-info/METADATA"] = metadata("helper", "2.2.0rc1", requires_python=">=3.9")
-    artifact.check(write_zip(tmp_path / "rc.zip", members), adapter)
+    assert code_of(artifact.check, write_zip(tmp_path / "rc.zip", members), adapter) == "CLOSURE_DEPENDENCY"
+    members = base_members()
+    del members["app_lib-1.0.0.dist-info/METADATA"]
+    members["app_lib-1.1rc1.dist-info/METADATA"] = metadata("app-lib", "1.1rc1", ["helper>=2,<3"])
+    adapter = _roots_only(repo, "app-lib>=1,<2\nboto3>=1.34\n")
+    assert code_of(artifact.check, write_zip(tmp_path / "root.zip", members), adapter) == "CLOSURE_ROOT"
 
 
 def test_accepted_majors_shape(repo, good_zip):
@@ -500,3 +514,9 @@ def test_version_substitution_must_touch_metadata_and_module(tmp_path, adapter):
     assert code_of(negatives._substitute, source, tmp_path / "m.zip", "botocore-1.44.1.dist-info/METADATA") == (
         "NEGATIVE_INEFFECTIVE"
     )
+
+
+def test_extraction_write_failure_is_coded(tmp_path, good_zip):
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file, so nothing can be created beneath it")
+    assert code_of(extract, good_zip, blocker / "out") == "UNREADABLE_ZIP"
