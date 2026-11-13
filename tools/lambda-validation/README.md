@@ -165,10 +165,14 @@ Unix sockets included, proving the guard with probes before tests start (each pr
 timeout, and any outcome but the guard's own refusal stops the run with exit 3). An xfailed
 test and a non-strict xpass count as skips: each fails the run unless its exact node id is in
 `allowed_skips`; so does a module-level skip, by its file's node id. Plugins load only from
-`[offline] plugins`: a positive `-p NAME` in the arguments stops the run (`-p no:NAME` is
-fine), as does any installed plugin the list does not name that registers at any point,
-however it arrives: a `conftest.py` or test module's `pytest_plugins`, or an import while
-tests run. `xdist` is refused,
+`[offline] plugins`: a positive `-p NAME` in the arguments stops the run, as does any
+installed plugin the list does not name that registers at any point, however it arrives: a
+`conftest.py` or test module's `pytest_plugins`, or an import while tests run. Every plugin
+the list names must load: the runner reads which plugins pytest holds after configuration and
+collection, before any test runs, prints them as `LOADED`, and stops the run (exit 3) if a
+listed one is missing, whether a `-p no:NAME` in the arguments or a `conftest.py` blocked it.
+A `-p no:NAME` in ini `addopts` cannot disable one, since pytest reads addopts before the
+runner's own `-p NAME`. `xdist` is refused,
 since its workers would run without the guard. A run that exits 0 counts only when the runner
 recorded it finishing every collected test with at least one test run, so `os._exit(0)` or
 `pytest.exit(returncode=0)` in a test, or `--collect-only`, fails with `OFFLINE_GUARD`. Name resolution is not blocked. It runs the application's interpreter, which must be Python 3.11 or newer with pytest 7 or newer, with

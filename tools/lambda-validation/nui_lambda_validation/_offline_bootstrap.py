@@ -72,7 +72,8 @@ def plugin_inventory(policy):
         print(f"OFFLINE_GUARD: pytest plugins unlisted={unlisted} listed-but-absent={absent}", file=sys.stderr)
         raise SystemExit(3)
     # Plugins load only through the policy list: a `-p NAME` in the arguments would load one
-    # the adapter declared not loaded. `-p no:NAME` disables, so it stays allowed.
+    # the adapter declared not loaded. `-p no:NAME` disables, so it stays allowed here; one that
+    # disables a declared plugin is caught after configuration (PluginPolicy).
     args = policy["args"]
     for index, arg in enumerate(args):
         value = args[index + 1] if arg == "-p" and index + 1 < len(args) else arg[2:] if arg.startswith("-p") else None
@@ -90,9 +91,9 @@ class PluginPolicy:
     def __init__(self, policy):
         from importlib.metadata import entry_points
 
-        self.forbidden = {
-            entry.name: entry.module for entry in entry_points(group="pytest11") if entry.name not in policy["plugins"]
-        }
+        self.entries = {entry.name: entry.module for entry in entry_points(group="pytest11")}
+        self.declared = list(policy["plugins"])
+        self.forbidden = {name: module for name, module in self.entries.items() if name not in self.declared}
         self.loaded = []
 
     # No `plugin_name` argument: pytest 7's hookspec lacks it, and pluggy refuses a hookimpl
@@ -107,11 +108,26 @@ class PluginPolicy:
     def report(self):
         print(f"OFFLINE_GUARD: plugins loaded outside [offline] plugins: {sorted(self.loaded)}", file=sys.stderr)
 
-    def pytest_collection_finish(self, session):
-        # Before any test runs: everything configuration and collection registered.
-        if self.loaded:
-            import pytest
+    def active(self, manager):
+        """Installed plugins pytest holds now, by entry-point name or module. A blocked name
+        (`-p no:NAME` after the runner's own `-p NAME`) maps to None, so it is not active."""
+        modules = {getattr(plugin, "__name__", None) for _, plugin in manager.list_name_plugin() if plugin is not None}
+        return sorted(
+            name for name, module in self.entries.items() if manager.get_plugin(name) is not None or module in modules
+        )
 
+    def pytest_collection_finish(self, session):
+        # Before any test runs: everything arguments, ini addopts, configuration and collection
+        # registered or blocked. LOADED is read here, from pytest, not from the policy.
+        import pytest
+
+        active = self.active(session.config.pluginmanager)
+        print("LOADED", active, flush=True)
+        inactive = [name for name in self.declared if name not in active]
+        if inactive:
+            print(f"OFFLINE_GUARD: plugins in [offline] plugins not loaded: {inactive}", file=sys.stderr)
+            pytest.exit("declared plugins not loaded", returncode=3)
+        if self.loaded:
             self.report()
             pytest.exit("plugins loaded outside the policy", returncode=3)
 
@@ -133,7 +149,7 @@ def main():
         policy["root"],
         "INSTALLED_PLUGINS",
         plugins,
-        "LOADED",
+        "DECLARED",
         policy["plugins"],
         flush=True,
     )

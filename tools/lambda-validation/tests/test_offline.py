@@ -156,6 +156,8 @@ def test_unlisted_plugin_stops_the_run(project, tmp_path, capfd):
         ([], {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": ""}),
         ([], {"BOTO_CONFIG": "/x"}),
         ([], {"PYTEST_ADDOPTS": "-p fakeplug"}),
+        ([], {"PYTEST_ADDOPTS": "-p no:fakeplug"}),
+        (["PYTEST_ADDOPTS"], {}),
         (["PYTEST_PLUGINS"], {}),
     ],
 )
@@ -301,17 +303,18 @@ LATE_ROUTE = "def test_late(request):\n    request.config.pluginmanager.import_p
 
 
 @pytest.mark.parametrize(
-    "args, conftest, module, message",
+    "args, conftest, module, message, loaded",
     [
-        (["-p", "fakeplug_ep"], None, None, "not -p in the arguments"),
-        (["-pfakeplug_ep"], None, None, "not -pfakeplug_ep in the arguments"),
-        ([], CONFTEST_ROUTE, None, "plugins loaded outside [offline] plugins: ['fakeplug_ep']"),
-        ([], None, MODULE_ROUTE, "outside [offline] plugins: ['fakeplug_ep']"),
-        ([], None, LATE_ROUTE, "outside [offline] plugins: ['fakeplug_ep']"),
+        (["-p", "fakeplug_ep"], None, None, "not -p in the arguments", None),
+        (["-pfakeplug_ep"], None, None, "not -pfakeplug_ep in the arguments", None),
+        # Registered by module name, so LOADED finds it by its entry point's module.
+        ([], CONFTEST_ROUTE, None, "plugins loaded outside [offline] plugins: ['fakeplug_ep']", "['fakeplug_ep']"),
+        ([], None, MODULE_ROUTE, "outside [offline] plugins: ['fakeplug_ep']", "['fakeplug_ep']"),
+        ([], None, LATE_ROUTE, "outside [offline] plugins: ['fakeplug_ep']", "[]"),
     ],
 )
 def test_a_plugin_declared_not_loaded_cannot_load_another_way(
-    project, tmp_path, capfd, args, conftest, module, message
+    project, tmp_path, capfd, args, conftest, module, message, loaded
 ):
     env = fake_plugin(tmp_path)
     marker = tmp_path / "a-test-ran"
@@ -328,8 +331,74 @@ def test_a_plugin_declared_not_loaded_cannot_load_another_way(
         sys.executable, project, run_args, allowed_skips=skips, passthrough=["KEPT"], fixed_env=env, not_loaded=declared
     )
     assert status == 3
-    assert message in capfd.readouterr().err
+    out, err = capfd.readouterr()
+    assert message in err
+    if loaded is not None:
+        assert f"LOADED {loaded}" in out
     assert not marker.exists(), "a test ran with a plugin the policy refused"
+
+
+def object_plugin(tmp_path):
+    """An installed pytest11 plugin whose entry point names an object, not a module, so pytest
+    holds it only under its entry-point name. Its pytest_configure leaves a marker."""
+    site = tmp_path / "site"
+    marker = tmp_path / "plugin-configured"
+    (site / "fakeplug-1.0.dist-info").mkdir(parents=True)
+    (site / "fakeplug-1.0.dist-info" / "METADATA").write_text("Metadata-Version: 2.1\nName: fakeplug\nVersion: 1.0\n")
+    (site / "fakeplug-1.0.dist-info" / "entry_points.txt").write_text("[pytest11]\nfakeplug_ep = fakeplug:hooks\n")
+    (site / "fakeplug.py").write_text(
+        "class Hooks:\n    def pytest_configure(self, config):\n"
+        f"        open({str(marker)!r}, 'w').close()\n\n\nhooks = Hooks()\n"
+    )
+    return {"PYTHONPATH": str(site)}, marker
+
+
+def run_declared(project, env, args):
+    return offline.run(
+        sys.executable,
+        project,
+        ["-q", "-p", "no:cacheprovider", *args, "tests"],
+        plugins=["fakeplug_ep"],
+        allowed_skips=["tests/test_skips.py::test_allowed"],
+        passthrough=["KEPT"],
+        fixed_env=env,
+        not_loaded={name: "unused" for name in installed_plugins()},
+    )
+
+
+BLOCKED_IN_CONFTEST = "def pytest_configure(config):\n    config.pluginmanager.set_blocked('fakeplug_ep')\n"
+
+
+@pytest.mark.parametrize(
+    "args, conftest",
+    [
+        # After the runner's own `-p fakeplug_ep`, so pytest blocks and unregisters it.
+        (["-p", "no:fakeplug_ep"], None),
+        (["-pno:fakeplug_ep"], None),
+        ([], BLOCKED_IN_CONFTEST),
+    ],
+)
+def test_a_declared_plugin_that_is_not_loaded_stops_the_run(project, tmp_path, capfd, args, conftest):
+    env, _ = object_plugin(tmp_path)
+    if conftest:
+        (project / "tests" / "conftest.py").write_text(conftest)
+    assert run_declared(project, env, args) == 3
+    out, err = capfd.readouterr()
+    assert "OFFLINE_GUARD: plugins in [offline] plugins not loaded: ['fakeplug_ep']" in err
+    assert "LOADED []" in out
+
+
+@pytest.mark.parametrize("ini", [None, "[pytest]\naddopts = -p no:fakeplug_ep\n"])
+def test_a_declared_plugin_that_loads_is_reported_loaded(project, tmp_path, capfd, ini):
+    # pytest puts ini addopts (and PYTEST_ADDOPTS, which the runner reserves) before the
+    # arguments, so the runner's own `-p fakeplug_ep` comes later and unblocks it: an ini
+    # `-p no:NAME` cannot disable a declared plugin, and the run reports it loaded.
+    env, marker = object_plugin(tmp_path)
+    if ini:
+        (project / "pytest.ini").write_text(ini)
+    assert run_declared(project, env, []) == 0
+    assert "LOADED ['fakeplug_ep']" in capfd.readouterr().out
+    assert marker.exists(), "the declared plugin never configured"
 
 
 def test_xdist_is_refused(project, capfd):
