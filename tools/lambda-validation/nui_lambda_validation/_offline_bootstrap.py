@@ -146,11 +146,12 @@ def main():
             self.unexpected = []
             self.allowed_seen = []
             self.ran = 0
-            self.finished = 0
+            self.finished = set()
             self.complete = False
 
         def pytest_runtest_logfinish(self, nodeid, location):
-            self.finished += 1
+            # A set of node ids, not a count: a retry plugin finishes one item more than once.
+            self.finished.add(nodeid)
 
         def pytest_runtest_logreport(self, report):
             # An xfail reports as skipped with ``wasxfail`` and a non-strict xpass as passed
@@ -169,7 +170,7 @@ def main():
         def pytest_sessionfinish(self, session, exitstatus):
             # pytest.exit(returncode=0) in a test or fixture ends the loop with a 0 and the rest
             # unrun: a pass needs every collected item to have finished.
-            self.complete = self.finished == len(getattr(session, "items", ()))
+            self.complete = {item.nodeid for item in getattr(session, "items", ())} <= self.finished
             if self.unexpected:
                 session.exitstatus = pytest.ExitCode.TESTS_FAILED
 

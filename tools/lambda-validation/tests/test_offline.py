@@ -343,13 +343,15 @@ def test_xdist_is_refused(project, capfd):
         ("import os\n\ndef test_a_exit():\n    os._exit(0)\n\ndef test_b_fails():\n    assert False\n", []),
         (None, ["--collect-only"]),
         (None, ["--setup-only"]),
+        # A passing test first, so the run has one and the exit is what has to be caught.
         (
-            "import pytest\n\ndef test_a_exit():\n    pytest.exit('stop', returncode=0)\n\ndef test_b_fails():\n    assert False\n",
+            "import pytest\n\ndef test_a_passes():\n    pass\n\ndef test_b_exit():\n"
+            "    pytest.exit('stop', returncode=0)\n\ndef test_c_fails():\n    assert False\n",
             [],
         ),
         (
             "import pytest\n\n@pytest.fixture\ndef stop():\n    pytest.exit('stop', returncode=0)\n\n"
-            "def test_a_exit(stop):\n    pass\n\ndef test_b_fails():\n    assert False\n",
+            "def test_a_passes():\n    pass\n\ndef test_b_exit(stop):\n    pass\n\ndef test_c_fails():\n    assert False\n",
             [],
         ),
     ],
@@ -406,3 +408,45 @@ def test_registration_hook_runs_on_pytest_7():
     spec.loader.exec_module(bootstrap)
     parameters = list(inspect.signature(bootstrap.PluginPolicy.pytest_plugin_registered).parameters)
     assert parameters == ["self", "plugin", "manager"]
+
+
+# A conftest that runs one test twice, as a retry plugin does: two finish events for one item.
+RETRY_CONFTEST = """
+import pytest
+from _pytest.runner import runtestprotocol
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_protocol(item, nextitem):
+    if item.name != "test_a_retried":
+        return None
+    for _ in range(2):
+        item.ihook.pytest_runtest_logstart(nodeid=item.nodeid, location=item.location)
+        runtestprotocol(item, nextitem=nextitem, log=True)
+        item.ihook.pytest_runtest_logfinish(nodeid=item.nodeid, location=item.location)
+    return True
+"""
+
+RETRIED_THEN_PASSING = "def test_a_retried():\n    pass\n\ndef test_b_passes():\n    pass\n"
+RETRIED_THEN_EXIT = (
+    "import pytest\n\ndef test_a_retried():\n    pass\n\ndef test_b_exit():\n    pytest.exit('stop', returncode=0)\n"
+)
+
+
+@pytest.mark.parametrize("suite, complete", [(RETRIED_THEN_PASSING, True), (RETRIED_THEN_EXIT, False)])
+def test_completion_is_per_item_not_per_finish(tmp_path, suite, complete):
+    # A retried item is one finished item; its extra finish must not stand in for an unrun one.
+    from nui_lambda_validation.errors import ValidationError
+
+    root = tmp_path / "retry"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "conftest.py").write_text(RETRY_CONFTEST)
+    (root / "tests" / "test_retry.py").write_text(suite)
+    declared = {name: "unused" for name in installed_plugins()}
+    args = ["-q", "-p", "no:cacheprovider", "tests"]
+    if complete:
+        assert offline.run(sys.executable, root, args, not_loaded=declared) == 0
+    else:
+        with pytest.raises(ValidationError) as caught:
+            offline.run(sys.executable, root, args, not_loaded=declared)
+        assert caught.value.code == "OFFLINE_GUARD" and "'complete': False" in caught.value.detail
