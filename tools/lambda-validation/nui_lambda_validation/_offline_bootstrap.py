@@ -147,30 +147,42 @@ def main():
             self.allowed_seen = []
             self.ran = 0
             self.finished = set()
-            self.torn_down = set()
+            self.phases = {}
+            self.collected = None
             self.complete = False
+
+        def pytest_collection_finish(self, session):
+            # The items as collection left them, held so no id is reused: a hook that later
+            # shrinks session.items must not shrink what has to finish.
+            self.collected = list(session.items)
 
         @pytest.hookimpl(hookwrapper=True)
         def pytest_runtest_protocol(self, item, nextitem):
             # Per collected item object: a retry plugin reruns inside one protocol call, and
             # the same file passed twice gives two items with one node id. An item finished
-            # when its protocol returned and pytest made this item's own teardown report inside
-            # that call: a protocol raising (pytest.exit) never finished, and an override that
-            # returns True without running the item, or runs another item, reports nothing for it.
-            self.torn_down.discard(id(item))
+            # when its protocol returned and pytest made this item's own reports inside that
+            # call: a teardown, and a call unless setup did not pass (a setup skip or error is
+            # the one way pytest skips the call). A protocol raising (pytest.exit) never
+            # finished, and an override that returns True without running the item, runs
+            # another item, or runs setup and teardown alone, reports no such pair for it.
+            self.phases.pop(id(item), None)
             outcome = yield
             try:
                 outcome.get_result()
             except BaseException:
                 return
-            if id(item) in self.torn_down:
+            phases = self.phases.get(id(item), {})
+            if "teardown" in phases and ("call" in phases or phases.get("setup", "passed") != "passed"):
                 self.finished.add(id(item))
 
         @pytest.hookimpl(hookwrapper=True)
         def pytest_runtest_makereport(self, item, call):
-            yield
-            if call.when == "teardown":
-                self.torn_down.add(id(item))
+            outcome = yield
+            try:
+                report = outcome.get_result()
+            except BaseException:
+                return
+            self.phases.setdefault(id(item), {})[call.when] = report.outcome
 
         def pytest_runtest_logreport(self, report):
             # An xfail reports as skipped with ``wasxfail`` and a non-strict xpass as passed
@@ -189,7 +201,7 @@ def main():
         def pytest_sessionfinish(self, session, exitstatus):
             # pytest.exit(returncode=0) in a test or fixture ends the loop with a 0 and the rest
             # unrun: a pass needs every collected item to have finished.
-            self.complete = {id(item) for item in getattr(session, "items", ())} <= self.finished
+            self.complete = self.collected is not None and all(id(item) in self.finished for item in self.collected)
             if self.unexpected:
                 session.exitstatus = pytest.ExitCode.TESTS_FAILED
 

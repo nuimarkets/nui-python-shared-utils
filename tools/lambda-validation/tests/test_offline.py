@@ -484,6 +484,23 @@ def pytest_runtest_protocol(item, nextitem):
     return None
 """
 
+# An override that runs setup and teardown for an item and never its call.
+SETUP_TEARDOWN_CONFTEST = """
+import pytest
+from _pytest.runner import call_and_report
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_protocol(item, nextitem):
+    if item.name != "test_b_bypassed":
+        return None
+    item.ihook.pytest_runtest_logstart(nodeid=item.nodeid, location=item.location)
+    call_and_report(item, "setup", log=True)
+    call_and_report(item, "teardown", log=True, nextitem=nextitem)
+    item.ihook.pytest_runtest_logfinish(nodeid=item.nodeid, location=item.location)
+    return True
+"""
+
 # An override that runs another item in place of the one it was handed.
 SUBSTITUTE_CONFTEST = """
 import pytest
@@ -502,7 +519,11 @@ def pytest_runtest_protocol(item, nextitem):
 """
 
 
-@pytest.mark.parametrize("conftest", [BYPASS_CONFTEST, SUBSTITUTE_CONFTEST], ids=["bypass", "substitute"])
+@pytest.mark.parametrize(
+    "conftest",
+    [BYPASS_CONFTEST, SUBSTITUTE_CONFTEST, SETUP_TEARDOWN_CONFTEST],
+    ids=["bypass", "substitute", "setup-teardown-only"],
+)
 def test_completion_needs_the_item_to_run_not_only_its_protocol_to_return(tmp_path, conftest):
     from nui_lambda_validation.errors import ValidationError
 
@@ -510,10 +531,67 @@ def test_completion_needs_the_item_to_run_not_only_its_protocol_to_return(tmp_pa
     (root / "tests").mkdir(parents=True)
     (root / "tests" / "conftest.py").write_text(conftest)
     (root / "tests" / "test_bypass.py").write_text(
-        "def test_a_passes():\n    pass\n\ndef test_b_bypassed():\n    pass\n"
+        "def test_a_passes():\n    pass\n\ndef test_b_bypassed():\n    assert False\n"
     )
     declared = {name: "unused" for name in installed_plugins()}
     args = ["-q", "-p", "no:cacheprovider", "tests"]
     with pytest.raises(ValidationError) as caught:
         offline.run(sys.executable, root, args, not_loaded=declared)
     assert caught.value.code == "OFFLINE_GUARD" and "'complete': False" in caught.value.detail
+
+
+# A conftest that empties session.items before the runner's own sessionfinish reads it.
+SHRINK_CONFTEST = """
+import pytest
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_sessionfinish(session):
+    session.items[:] = []
+"""
+
+# A consumer's own makereport hookwrapper, as a reporting plugin adds, around a real suite.
+WRAPPER_CONFTEST = """
+import pytest
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    outcome.get_result().user_properties.append(("phase", call.when))
+"""
+
+
+def test_completion_holds_the_collected_items_against_a_later_shrink(tmp_path):
+    from nui_lambda_validation.errors import ValidationError
+
+    root = tmp_path / "shrink"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "conftest.py").write_text(SHRINK_CONFTEST)
+    (root / "tests" / "test_shrink.py").write_text(
+        "import pytest\n\ndef test_a_passes():\n    pass\n\ndef test_b_exit():\n"
+        "    pytest.exit('stop', returncode=0)\n\ndef test_c_fails():\n    assert False\n"
+    )
+    declared = {name: "unused" for name in installed_plugins()}
+    args = ["-q", "-p", "no:cacheprovider", "tests"]
+    with pytest.raises(ValidationError) as caught:
+        offline.run(sys.executable, root, args, not_loaded=declared)
+    assert caught.value.code == "OFFLINE_GUARD" and "'complete': False" in caught.value.detail
+
+
+def test_completion_accepts_a_real_suite_under_a_consumer_makereport_wrapper(tmp_path):
+    # A setup skip leaves no call report and still finishes its item.
+    root = tmp_path / "wrapped"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "conftest.py").write_text(WRAPPER_CONFTEST)
+    (root / "tests" / "test_wrapped.py").write_text(
+        "import pytest\n\n@pytest.fixture\ndef skipped():\n    pytest.skip('allowed')\n\n"
+        "def test_a_passes():\n    pass\n\ndef test_b_setup_skip(skipped):\n    pass\n\n"
+        "@pytest.mark.parametrize('n', [1, 2])\ndef test_c_param(n):\n    assert n\n"
+    )
+    declared = {name: "unused" for name in installed_plugins()}
+    args = ["-q", "-p", "no:cacheprovider", "tests"]
+    run = offline.run(
+        sys.executable, root, args, not_loaded=declared, allowed_skips=["tests/test_wrapped.py::test_b_setup_skip"]
+    )
+    assert run == 0
