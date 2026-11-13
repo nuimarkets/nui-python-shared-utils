@@ -955,6 +955,45 @@ class TestNeverRaises:
 
         assert ts.should_reject_token(claims_for(clock)) is False
 
+    @pytest.mark.parametrize(
+        "exp",
+        [10**400, -(10**400), float("inf"), float("nan"), 1e308],
+        ids=["huge-int", "huge-negative-int", "inf", "nan", "1e308"],
+    )
+    def test_an_extreme_exp_still_applies_the_answer(self, issuer, monkeypatch, clock, exp):
+        # validate_jwt accepts each of these (a huge int, a JSON Infinity or NaN), so the
+        # guard must not trade the issuer's answer for an arithmetic error.
+        configure(monkeypatch, mode="enforce", fail="open")
+        issuer.status_default = answer(False)
+        claims = claims_for(clock)
+        claims["exp"] = exp
+
+        assert ts.should_reject_token(claims) is True
+        assert ts.should_reject_token(claims) is True
+        assert len(issuer.status_calls) == 1  # the revoked answer was cached
+
+    def test_a_failed_cache_write_keeps_the_answer(self, issuer, monkeypatch, clock):
+        def broken_store(jti, entry):
+            raise RuntimeError("cache write failed")
+
+        monkeypatch.setattr(ts, "_store", broken_store)
+        issuer.status_default = answer(False)
+
+        result = check(clock)
+
+        assert (result.status, result.reason) == (TokenStatus.REVOKED, None)
+        assert ts.should_reject_token(claims_for(clock)) is True
+
+    @pytest.mark.parametrize("broken", ["_announce", "_report"])
+    def test_a_telemetry_error_does_not_change_the_decision(self, issuer, monkeypatch, clock, broken):
+        def boom(*args, **kwargs):
+            raise RuntimeError("telemetry bug")
+
+        monkeypatch.setattr(ts, broken, boom)
+        issuer.status_default = answer(False)
+
+        assert ts.should_reject_token(claims_for(clock)) is True
+
     @pytest.mark.parametrize("exp", [None, "soon", True, [1]])
     def test_unusable_exp_counts_as_expired(self, issuer, clock, exp):
         claims = claims_for(clock)
@@ -1000,6 +1039,17 @@ class TestRequireAuth:
         assert claims is None
         assert error["statusCode"] == 401
         assert len(real_clock_issuer.status_calls) == 1
+
+    def test_enforce_refuses_a_revoked_token_whose_exp_overflows_a_float(
+        self, real_clock_issuer, rsa_keypair, mock_jwt_secret, monkeypatch
+    ):
+        monkeypatch.setenv("JWT_PUBLIC_KEY_SECRET", "test/jwt-key")
+        private_key, _, _ = rsa_keypair
+        token = _sign_jwt(private_key, {"jti": JTI, "sub": "42", "exp": 10**400})
+        real_clock_issuer.status_default = answer(False)
+
+        with pytest.raises(AuthenticationError, match="did not confirm the token is active"):
+            require_auth({"headers": {"Authorization": f"Bearer {token}"}})
 
     def test_enforce_admits_an_active_token(self, real_clock_issuer, signed_event):
         assert require_auth(signed_event)["jti"] == JTI
@@ -1271,6 +1321,31 @@ class TestHttpExchange:
         result, _ = run_real(monkeypatch, status_server.url("/status"), token_server.url("/token"))
 
         assert result.status is TokenStatus.ACTIVE
+
+    def test_chunked_answer_with_trailers(self, servers, monkeypatch):
+        token_server = servers(respond(TOKEN_REPLY))
+        chunked = (
+            b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n11\r\n{"active": false}\r\n0\r\nX-Trace: a\r\n\r\n'
+        )
+        status_server = servers(respond(chunked))
+
+        result, _ = run_real(monkeypatch, status_server.url("/status"), token_server.url("/token"))
+
+        assert result.status is TokenStatus.REVOKED
+
+    @pytest.mark.parametrize(
+        "ending",
+        [b"0\r\n", b"0\r\nX-Trace: a\r\n", b"0\r\nX-Trace: a"],
+        ids=["no-final-crlf", "unterminated-trailer", "cut-mid-trailer"],
+    )
+    def test_a_chunked_answer_cut_before_its_end_is_not_an_answer(self, servers, monkeypatch, ending):
+        token_server = servers(respond(TOKEN_REPLY))
+        raw = b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n10\r\n{"active": true}\r\n' + ending
+        status_server = servers(respond(raw))
+
+        result, _ = run_real(monkeypatch, status_server.url("/status"), token_server.url("/token"))
+
+        assert (result.status, result.reason) == (TokenStatus.UNAVAILABLE, "connection")
 
     def test_answer_read_to_close_without_a_length(self, servers, monkeypatch):
         token_server = servers(respond(TOKEN_REPLY))

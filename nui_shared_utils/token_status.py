@@ -211,7 +211,8 @@ def should_reject_token(claims: Mapping[str, Any]) -> bool:
     - ``shadow``: checks and logs ``would reject``, returns False.
     - ``enforce``: True for ``revoked``, and for ``unavailable`` when fail is ``closed``.
 
-    Never raises.
+    An error after the settings are read is an ``unavailable`` result, which the
+    fail setting decides, and a logging error changes nothing. Never raises.
     """
     try:
         return _decide(claims)
@@ -239,16 +240,16 @@ def _decide(claims: Mapping[str, Any]) -> bool:
 
     raw_jti = claims.get("jti")
     jti = raw_jti if isinstance(raw_jti, str) else ""
-    raw_exp = claims.get("exp")
-    exp = float(raw_exp) if isinstance(raw_exp, (int, float)) and not isinstance(raw_exp, bool) else 0.0
 
+    # Everything from here to the decision is guarded, so an unexpected error is an
+    # `unavailable` result that the fail setting decides, never a silent admit.
     try:
-        check = _check(url, jti, exp)
+        check = _check(url, jti, _exp_seconds(claims.get("exp")))
     except Exception:
         check = TokenStatusCheck(TokenStatus.UNAVAILABLE, False, "unexpected", 0.0)
 
     if not check.cache_hit:
-        _announce(mode, fail, url)
+        _quietly(_announce, mode, fail, url)
 
     if check.status is TokenStatus.REVOKED:
         reject = True
@@ -257,9 +258,32 @@ def _decide(claims: Mapping[str, Any]) -> bool:
     else:
         reject = False
 
-    _report(check, reject, mode, fail, jti, claims)
+    _quietly(_report, check, reject, mode, fail, jti, claims)
 
     return reject and mode == MODE_ENFORCE
+
+
+def _exp_seconds(raw: Any) -> float:
+    """
+    The ``exp`` claim as float seconds. A value that is not a number, or is NaN,
+    counts as 0 (already expired), so no ``active`` answer is cached for it. An
+    integer too large for a float is infinity, which ``validate_jwt`` accepts.
+    """
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return 0.0
+    try:
+        value = float(raw)
+    except OverflowError:
+        return math.inf if raw > 0 else -math.inf
+    return 0.0 if math.isnan(value) else value
+
+
+def _quietly(fn: Callable[..., Any], *args: Any) -> None:
+    """Run telemetry that must not change whether a token is admitted."""
+    try:
+        fn(*args)
+    except Exception:
+        pass
 
 
 def _setting(name: str, allowed: Tuple[str, ...], default: str) -> Tuple[str, bool]:
@@ -462,7 +486,10 @@ def _resolve(url: str, jti: str, exp: float, deadline: float) -> Tuple[TokenStat
         _open_breaker()
         return TokenStatus.UNAVAILABLE, False, answer, detail
 
-    _remember(jti, answer, exp, t0)
+    try:
+        _remember(jti, answer, exp, t0)
+    except Exception:
+        pass  # A failed cache write leaves the issuer's answer intact.
     return (TokenStatus.ACTIVE if answer else TokenStatus.REVOKED), False, None, None
 
 
@@ -502,9 +529,11 @@ def _remember(jti: str, active: bool, exp: float, t0: float) -> None:
             _store(jti, entry)
         return
 
-    ttl = math.ceil(max(REVOKED_GRACE_SECONDS, exp + REVOKED_GRACE_SECONDS - now))
+    ttl = max(REVOKED_GRACE_SECONDS, exp + REVOKED_GRACE_SECONDS - now)
+    # A token that never expires keeps its revoked entry until the LRU bound evicts it.
+    expires_at = now + math.ceil(ttl) if math.isfinite(ttl) else math.inf
     with _lock:
-        _store(jti, _Entry(TokenStatus.REVOKED, now + ttl))
+        _store(jti, _Entry(TokenStatus.REVOKED, expires_at))
 
 
 def _store(jti: str, entry: _Entry) -> None:
@@ -944,9 +973,22 @@ def _read_chunked(reader: _Reader, max_body: int) -> bytes:
             raise TransportError("invalid chunk size")
         size = int(size_text, 16)
         if size == 0:
-            return bytes(body)  # Trailers are not needed; the connection closes.
+            _read_trailers(reader)
+            return bytes(body)
         if len(body) + size > max_body:
             raise OversizedResponse()
         body += reader.read_exact(size)
         if reader.read_exact(2) != b"\r\n":
             raise TransportError("invalid chunk")
+
+
+def _read_trailers(reader: _Reader) -> None:
+    """Read the trailer section through its empty line; a body cut before it is incomplete."""
+    total = 0
+    while True:
+        line = reader.read_until(b"\r\n", MAX_HEADER_BYTES)
+        if not line:
+            return
+        total += len(line) + 2
+        if total > MAX_HEADER_BYTES:
+            raise TransportError("trailer section too long")
