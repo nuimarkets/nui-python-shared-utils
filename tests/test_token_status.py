@@ -729,6 +729,16 @@ class TestMachineToken:
 
         assert issuer.token_calls[0]["deadline"] == issuer.status_calls[0]["deadline"]
 
+    def test_a_refetch_after_expiry_gets_the_whole_budget(self, issuer, clock):
+        # With no valid token to fall back on, a halved budget would only fail sooner.
+        issuer.token_queue = [token_response("first", expires_in=2 * 86_400)]
+        check(clock, jti="j1")
+        clock.advance(2 * 86_400)
+
+        check(clock, jti="j2")
+
+        assert issuer.token_calls[1]["deadline"] == issuer.status_calls[1]["deadline"]
+
     def test_failed_refetch_after_expiry_is_unavailable(self, issuer, clock):
         issuer.token_queue = [token_response("first", expires_in=2 * 86_400), HttpResponse(500, b"")]
         check(clock, jti="j1")
