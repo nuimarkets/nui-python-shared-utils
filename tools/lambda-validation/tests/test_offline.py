@@ -470,3 +470,32 @@ def test_completion_counts_each_collected_item_not_each_node_id(tmp_path):
     with pytest.raises(ValidationError) as caught:
         offline.run(sys.executable, root, args, not_loaded=declared)
     assert caught.value.code == "OFFLINE_GUARD" and "'complete': False" in caught.value.detail
+
+
+# A conftest protocol override that claims an item without running it, as a skip-by-hook does.
+BYPASS_CONFTEST = """
+import pytest
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_protocol(item, nextitem):
+    if item.name == "test_b_bypassed":
+        return True
+    return None
+"""
+
+
+def test_completion_needs_the_item_to_run_not_only_its_protocol_to_return(tmp_path):
+    from nui_lambda_validation.errors import ValidationError
+
+    root = tmp_path / "bypass"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "conftest.py").write_text(BYPASS_CONFTEST)
+    (root / "tests" / "test_bypass.py").write_text(
+        "def test_a_passes():\n    pass\n\ndef test_b_bypassed():\n    pass\n"
+    )
+    declared = {name: "unused" for name in installed_plugins()}
+    args = ["-q", "-p", "no:cacheprovider", "tests"]
+    with pytest.raises(ValidationError) as caught:
+        offline.run(sys.executable, root, args, not_loaded=declared)
+    assert caught.value.code == "OFFLINE_GUARD" and "'complete': False" in caught.value.detail

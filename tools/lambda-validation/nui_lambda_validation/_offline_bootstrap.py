@@ -147,19 +147,24 @@ def main():
             self.allowed_seen = []
             self.ran = 0
             self.finished = set()
+            self.torn_down = False
             self.complete = False
 
         @pytest.hookimpl(hookwrapper=True)
         def pytest_runtest_protocol(self, item, nextitem):
             # Per collected item object: a retry plugin reruns inside one protocol call, and
-            # the same file passed twice gives two items with one node id. An item whose
-            # protocol raised (pytest.exit) never finished.
+            # the same file passed twice gives two items with one node id. An item finished
+            # when its protocol returned and pytest reported its teardown inside that call: a
+            # protocol raising (pytest.exit) never finished, and an override returning True
+            # without running the item reports nothing.
+            self.torn_down = False
             outcome = yield
             try:
                 outcome.get_result()
             except BaseException:
                 return
-            self.finished.add(id(item))
+            if self.torn_down:
+                self.finished.add(id(item))
 
         def pytest_runtest_logreport(self, report):
             # An xfail reports as skipped with ``wasxfail`` and a non-strict xpass as passed
@@ -169,6 +174,8 @@ def main():
                 (self.allowed_seen if report.nodeid in allowed else self.unexpected).append(report.nodeid)
             if report.when == "call":
                 self.ran += 1
+            if report.when == "teardown":
+                self.torn_down = True
 
         def pytest_collectreport(self, report):
             if report.skipped:
