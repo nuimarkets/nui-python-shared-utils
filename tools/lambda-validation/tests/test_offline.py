@@ -484,13 +484,31 @@ def pytest_runtest_protocol(item, nextitem):
     return None
 """
 
+# An override that runs another item in place of the one it was handed.
+SUBSTITUTE_CONFTEST = """
+import pytest
+from _pytest.runner import runtestprotocol
 
-def test_completion_needs_the_item_to_run_not_only_its_protocol_to_return(tmp_path):
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_protocol(item, nextitem):
+    if item.name != "test_b_bypassed":
+        return None
+    other = next(i for i in item.session.items if i.name == "test_a_passes")
+    item.ihook.pytest_runtest_logstart(nodeid=other.nodeid, location=other.location)
+    runtestprotocol(other, nextitem=nextitem, log=True)
+    item.ihook.pytest_runtest_logfinish(nodeid=other.nodeid, location=other.location)
+    return True
+"""
+
+
+@pytest.mark.parametrize("conftest", [BYPASS_CONFTEST, SUBSTITUTE_CONFTEST], ids=["bypass", "substitute"])
+def test_completion_needs_the_item_to_run_not_only_its_protocol_to_return(tmp_path, conftest):
     from nui_lambda_validation.errors import ValidationError
 
     root = tmp_path / "bypass"
     (root / "tests").mkdir(parents=True)
-    (root / "tests" / "conftest.py").write_text(BYPASS_CONFTEST)
+    (root / "tests" / "conftest.py").write_text(conftest)
     (root / "tests" / "test_bypass.py").write_text(
         "def test_a_passes():\n    pass\n\ndef test_b_bypassed():\n    pass\n"
     )

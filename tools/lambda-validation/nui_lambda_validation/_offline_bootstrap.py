@@ -147,24 +147,30 @@ def main():
             self.allowed_seen = []
             self.ran = 0
             self.finished = set()
-            self.torn_down = False
+            self.torn_down = set()
             self.complete = False
 
         @pytest.hookimpl(hookwrapper=True)
         def pytest_runtest_protocol(self, item, nextitem):
             # Per collected item object: a retry plugin reruns inside one protocol call, and
             # the same file passed twice gives two items with one node id. An item finished
-            # when its protocol returned and pytest reported its teardown inside that call: a
-            # protocol raising (pytest.exit) never finished, and an override returning True
-            # without running the item reports nothing.
-            self.torn_down = False
+            # when its protocol returned and pytest made this item's own teardown report inside
+            # that call: a protocol raising (pytest.exit) never finished, and an override that
+            # returns True without running the item, or runs another item, reports nothing for it.
+            self.torn_down.discard(id(item))
             outcome = yield
             try:
                 outcome.get_result()
             except BaseException:
                 return
-            if self.torn_down:
+            if id(item) in self.torn_down:
                 self.finished.add(id(item))
+
+        @pytest.hookimpl(hookwrapper=True)
+        def pytest_runtest_makereport(self, item, call):
+            yield
+            if call.when == "teardown":
+                self.torn_down.add(id(item))
 
         def pytest_runtest_logreport(self, report):
             # An xfail reports as skipped with ``wasxfail`` and a non-strict xpass as passed
@@ -174,8 +180,6 @@ def main():
                 (self.allowed_seen if report.nodeid in allowed else self.unexpected).append(report.nodeid)
             if report.when == "call":
                 self.ran += 1
-            if report.when == "teardown":
-                self.torn_down = True
 
         def pytest_collectreport(self, report):
             if report.skipped:
