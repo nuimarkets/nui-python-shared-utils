@@ -149,9 +149,17 @@ def main():
             self.finished = set()
             self.complete = False
 
-        def pytest_runtest_logfinish(self, nodeid, location):
-            # A set of node ids, not a count: a retry plugin finishes one item more than once.
-            self.finished.add(nodeid)
+        @pytest.hookimpl(hookwrapper=True)
+        def pytest_runtest_protocol(self, item, nextitem):
+            # Per collected item object: a retry plugin reruns inside one protocol call, and
+            # the same file passed twice gives two items with one node id. An item whose
+            # protocol raised (pytest.exit) never finished.
+            outcome = yield
+            try:
+                outcome.get_result()
+            except BaseException:
+                return
+            self.finished.add(id(item))
 
         def pytest_runtest_logreport(self, report):
             # An xfail reports as skipped with ``wasxfail`` and a non-strict xpass as passed
@@ -170,7 +178,7 @@ def main():
         def pytest_sessionfinish(self, session, exitstatus):
             # pytest.exit(returncode=0) in a test or fixture ends the loop with a 0 and the rest
             # unrun: a pass needs every collected item to have finished.
-            self.complete = {item.nodeid for item in getattr(session, "items", ())} <= self.finished
+            self.complete = {id(item) for item in getattr(session, "items", ())} <= self.finished
             if self.unexpected:
                 session.exitstatus = pytest.ExitCode.TESTS_FAILED
 

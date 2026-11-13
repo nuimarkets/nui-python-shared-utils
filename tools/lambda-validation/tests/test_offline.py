@@ -450,3 +450,23 @@ def test_completion_is_per_item_not_per_finish(tmp_path, suite, complete):
         with pytest.raises(ValidationError) as caught:
             offline.run(sys.executable, root, args, not_loaded=declared)
         assert caught.value.code == "OFFLINE_GUARD" and "'complete': False" in caught.value.detail
+
+
+# The same file passed twice is collected twice, with one node id per test.
+DUPLICATED = (
+    "import pytest\n\nCALLS = []\n\ndef test_a_passes():\n    pass\n\ndef test_b_second_time_exits():\n"
+    "    CALLS.append(1)\n    if len(CALLS) == 2:\n        pytest.exit('stop', returncode=0)\n"
+)
+
+
+def test_completion_counts_each_collected_item_not_each_node_id(tmp_path):
+    from nui_lambda_validation.errors import ValidationError
+
+    root = tmp_path / "dup"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "test_dup.py").write_text(DUPLICATED)
+    declared = {name: "unused" for name in installed_plugins()}
+    args = ["-q", "-p", "no:cacheprovider", "tests/test_dup.py", "tests/test_dup.py"]
+    with pytest.raises(ValidationError) as caught:
+        offline.run(sys.executable, root, args, not_loaded=declared)
+    assert caught.value.code == "OFFLINE_GUARD" and "'complete': False" in caught.value.detail
