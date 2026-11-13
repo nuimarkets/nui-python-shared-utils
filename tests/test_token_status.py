@@ -707,6 +707,28 @@ class TestMachineToken:
         (line,) = records(caplog, "Token revocation: machine token refresh failed, using the current one")
         assert line.detail == "http_500"
 
+    def test_a_stalled_refresh_still_leaves_time_for_the_status_call(self, issuer, clock):
+        issuer.token_queue = [token_response("first", expires_in=2 * 86_400)]
+        check(clock, jti="j1")
+        clock.advance(86_400 + 10)
+
+        def stall_until_deadline(call):
+            time.sleep(max(0.0, call["deadline"] - time.monotonic()))
+            raise TransportError("timeout")
+
+        issuer.token_queue = [stall_until_deadline]
+        started = time.monotonic()
+        result = check(clock, jti="j2")
+
+        assert result.status is TokenStatus.ACTIVE
+        assert issuer.bearer(1) == "Bearer first"
+        assert time.monotonic() - started < ts.DEADLINE_SECONDS
+
+    def test_a_first_fetch_gets_the_whole_budget(self, issuer, clock):
+        check(clock)
+
+        assert issuer.token_calls[0]["deadline"] == issuer.status_calls[0]["deadline"]
+
     def test_failed_refetch_after_expiry_is_unavailable(self, issuer, clock):
         issuer.token_queue = [token_response("first", expires_in=2 * 86_400), HttpResponse(500, b"")]
         check(clock, jti="j1")

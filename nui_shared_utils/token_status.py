@@ -634,7 +634,8 @@ def _get_machine_token(deadline: float) -> str:
     """
     This process's token for the status route, fetched lazily and reused until
     a day before it expires. If a refetch fails while the current token is still
-    valid, the current one is used.
+    valid, the current one is used, and the refetch gets only half the time left,
+    so a stalled token endpoint still leaves time for the status call.
     """
     global _machine_token
     now = _now()
@@ -644,8 +645,12 @@ def _get_machine_token(deadline: float) -> str:
     if current is not None and now < current.refresh_at:
         return current.value
 
+    budget = deadline
+    if current is not None and now < current.expires_at:
+        budget = time.monotonic() + (deadline - time.monotonic()) / 2
+
     try:
-        fresh = _fetch_machine_token(deadline)
+        fresh = _fetch_machine_token(budget)
     except _MachineTokenError as e:
         if current is not None and now < current.expires_at:
             if _first_in_window("token_refresh_failed", WARNING_LOG_INTERVAL):
