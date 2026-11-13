@@ -141,14 +141,27 @@ class Adapter:
         if ("test_only" in deps) != ("test_lock" in deps):
             fail("ADAPTER_CONFIG", "[dependencies] test_only and test_lock go together, or the leak check never runs")
         calendar = deps.get("calendar_versioned", {})
+        empty = sorted(
+            key for key in ("pins", "roots", "accepted_majors", "test_lock") if key in deps and not deps[key].strip()
+        )
+        if empty:
+            fail("ADAPTER_CONFIG", f"[dependencies] {empty} empty, so the check each configures would never run")
+        if deps["mode"] != "exact" and "pins" in deps:
+            fail("ADAPTER_CONFIG", "[dependencies] pins is read only in exact mode")
         if calendar and "accepted_majors" not in deps:
             fail("ADAPTER_CONFIG", "[dependencies] calendar_versioned only qualifies accepted_majors")
         blank = sorted(name for name, reason in calendar.items() if not reason.strip())
         if blank:
             fail("ADAPTER_CONFIG", f"[dependencies.calendar_versioned] needs a reason for {blank}")
         names = self.get("zip").get("forbidden", {}).get("top_level", [])
-        if any(not name or "/" in name or name in (".", "..") for name in names):
+        if any(not name or "/" in name or "\\" in name or name in (".", "..") for name in names):
             fail("ADAPTER_CONFIG", f"[zip.forbidden] top_level takes bare path components, got {names}")
+        config_path = self.get("build").get("config_path")
+        if config_path is not None:
+            try:
+                config_path.format(stage="stage")
+            except (KeyError, IndexError, ValueError) as error:
+                fail("ADAPTER_CONFIG", f"[build] config_path may name only {{stage}}: {error!r}")
         limit = self.get("zip").get("uncompressed_limit", LAMBDA_UNZIPPED_LIMIT)
         if not 0 < limit <= LAMBDA_UNZIPPED_LIMIT:
             fail(

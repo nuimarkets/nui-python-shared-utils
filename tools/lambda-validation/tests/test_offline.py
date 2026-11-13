@@ -155,6 +155,8 @@ def test_unlisted_plugin_stops_the_run(project, tmp_path, capfd):
         (["AWS_SHARED_CREDENTIALS_FILE"], {}),
         ([], {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": ""}),
         ([], {"BOTO_CONFIG": "/x"}),
+        ([], {"PYTEST_ADDOPTS": "-p fakeplug"}),
+        (["PYTEST_PLUGINS"], {}),
     ],
 )
 def test_reserved_names_cannot_be_passed_or_set(passthrough, fixed):
@@ -277,3 +279,74 @@ def test_guard_probe_accepts_only_its_own_refusal(tmp_path, error, status):
         assert "Traceback" not in result.stderr
     else:
         assert "TIMEOUTS [2.0, 2.0, 2.0, 2.0]" in result.stdout
+
+
+def fake_plugin(tmp_path):
+    """An installed pytest11 plugin, visible to the app interpreter through PYTHONPATH."""
+    site = tmp_path / "site"
+    (site / "fakeplug-1.0.dist-info").mkdir(parents=True)
+    (site / "fakeplug-1.0.dist-info" / "METADATA").write_text("Metadata-Version: 2.1\nName: fakeplug\nVersion: 1.0\n")
+    (site / "fakeplug-1.0.dist-info" / "entry_points.txt").write_text("[pytest11]\nfakeplug = fakeplug\n")
+    (site / "fakeplug.py").write_text("")
+    return {"PYTHONPATH": str(site)}
+
+
+@pytest.mark.parametrize(
+    "args, conftest, message",
+    [
+        (["-p", "fakeplug"], None, "not -p in the arguments"),
+        (["-pfakeplug"], None, "not -pfakeplug in the arguments"),
+        ([], "pytest_plugins = ['fakeplug']\n", "plugins loaded outside [offline] plugins: ['fakeplug']"),
+    ],
+)
+def test_a_plugin_declared_not_loaded_cannot_load_another_way(project, tmp_path, capfd, args, conftest, message):
+    env = fake_plugin(tmp_path)
+    if conftest:
+        (project / "tests" / "conftest.py").write_text(conftest)
+    declared = {name: "unused" for name in installed_plugins()}
+    declared["fakeplug"] = "declared not loaded"
+    skips = ["tests/test_skips.py::test_allowed"]
+    run_args = ["-q", "-p", "no:cacheprovider", *args, "tests"]
+    status = offline.run(
+        sys.executable, project, run_args, allowed_skips=skips, passthrough=["KEPT"], fixed_env=env, not_loaded=declared
+    )
+    assert status == 3
+    assert message in capfd.readouterr().err
+
+
+def test_xdist_is_refused(project, capfd):
+    assert run(project, plugins=["xdist"]) == 3
+    assert "xdist workers run without the network guard" in capfd.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "extra_test, args",
+    [
+        ("import os\n\ndef test_a_exit():\n    os._exit(0)\n\ndef test_b_fails():\n    assert False\n", []),
+        (None, ["--collect-only"]),
+    ],
+)
+def test_a_run_that_never_finished_or_ran_nothing_is_not_a_pass(project, extra_test, args):
+    from nui_lambda_validation.errors import ValidationError
+
+    if extra_test:
+        (project / "tests" / "test_exit.py").write_text(extra_test)
+    declared = {name: "unused" for name in installed_plugins()}
+    with pytest.raises(ValidationError) as caught:
+        offline.run(
+            sys.executable,
+            project,
+            ["-q", "-p", "no:cacheprovider", *args, "tests"],
+            allowed_skips=["tests/test_skips.py::test_allowed"],
+            passthrough=["KEPT"],
+            not_loaded=declared,
+        )
+    assert caught.value.code == "OFFLINE_GUARD"
+
+
+def test_collection_skip_can_be_allowed_by_its_node_id(project):
+    (project / "tests" / "test_module_skip.py").write_text(
+        "import pytest\npytest.skip('module', allow_module_level=True)\n"
+    )
+    skips = ["tests/test_skips.py::test_allowed", "tests/test_module_skip.py"]
+    assert run(project, allowed_skips=skips) == 0

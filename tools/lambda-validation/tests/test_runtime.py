@@ -136,6 +136,34 @@ def test_network_guard_probe_accepts_only_its_own_refusal(tmp_path, error, expec
     assert expected in out and "Traceback" not in out
 
 
+def _loadable_shared_object():
+    """A real shared object this interpreter can load: one of its own extension modules."""
+    import importlib
+
+    for name in ("_ctypes", "_json", "_socket", "_struct", "math"):
+        found = getattr(importlib.import_module(name), "__file__", None)
+        if found and found.endswith(".so"):
+            return Path(found)
+    raise AssertionError("no extension module file to load")
+
+
+def test_declared_plain_library_loads_from_the_artifact(tmp_path):
+    root = fake_root(tmp_path / "task")
+    (root / "vendor").mkdir()
+    (root / "vendor" / "libreal.so").write_bytes(_loadable_shared_object().read_bytes())
+    (root / "vendor" / "libbroken.so").write_bytes(b"\x7fELF\x02\x01\x01" + b"\x00" * 57)
+    assert "OK" in run_host(root, "runtime.check_native([], plain_libraries=['vendor/libreal.so'], root=root)")
+    # A declared library that is present but does not load fails with a code, not an OSError.
+    out = run_host(root, "runtime.check_native([], plain_libraries=['vendor/libbroken.so'], root=root)")
+    assert "CODE NATIVE_EXPECTED" in out and "does not load" in out
+    # A path that leaves the artifact would load some other copy, so it is refused.
+    outside = tmp_path / "libreal.so"
+    outside.write_bytes(_loadable_shared_object().read_bytes())
+    for relative in ("../libreal.so", str(outside)):
+        out = run_host(root, f"runtime.check_native([], plain_libraries=[{relative!r}], root=root)")
+        assert "CODE NATIVE_EXPECTED" in out and "missing from the artifact" in out
+
+
 def test_tool_isolation(tmp_path):
     root = fake_root(tmp_path / "task")
     body = "runtime.assert_tool_isolated(root=Path(runtime.__file__).resolve().parent.parent)"

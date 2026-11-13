@@ -169,10 +169,14 @@ def check_native(modules, plain_libraries=(), root=TASK_ROOT):
             _fail("NATIVE_ABI", f"{name}: {path.name} is not {tag} or abi3")
         loaded.append(str(path))
     for relative in plain_libraries:
-        path = root / relative
-        if not path.is_file():
-            _fail("NATIVE_EXPECTED", f"declared library missing: {path}")
-        ctypes.CDLL(str(path))
+        # Resolved and kept under the artifact: an absolute or `../` path would load the image's copy.
+        path = (Path(root) / relative).resolve()
+        if not path.is_relative_to(Path(root).resolve()) or not path.is_file():
+            _fail("NATIVE_EXPECTED", f"declared library missing from the artifact: {relative}")
+        try:
+            ctypes.CDLL(str(path))
+        except OSError as error:
+            _fail("NATIVE_EXPECTED", f"declared library {relative} does not load: {error}")
         loaded.append(str(path))
     return loaded
 

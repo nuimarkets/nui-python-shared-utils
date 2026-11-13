@@ -46,7 +46,7 @@ in-container check's own code in its detail.
 | Command | What it does |
 | --- | --- |
 | `verify --config lambda-validation.toml --output DIR` | Fails `SELF_CHECK` unless the running tool is the commit the committed `requirements-validation.txt` pins. Pulls the runtime image and every `build_images` entry that is not on the host (`--platform` from `[target] machine`; a failed pull is `BUILD`), so a consumer needs no pull step of its own. Builds every stage from `git archive HEAD` with synthetic configuration, then per stage: secret scan, `check-zip`, extraction proof, a check that the image runs the `[target]` Python, the adapter's smoke script in the Lambda image, and `pip check` in the image over the artifact itself (`/var/task` on `PYTHONPATH`, since `python -m pip` drops the working directory from `sys.path`); the first stage also runs `negatives`. Each stage's package is written to `.serverless-validation-<stage>/` inside the build tree, so the repository's package patterns must exclude `.serverless-*/**`. `[container.env]` may not set a variable the container command sets itself. The adapter, its lock files and its smoke script are read from the committed tree, never the working copy, and the adapter must sit at the repository's top level. Records the digests of the runtime image and of every `build_images` entry. Copies each compiled template out for the repository's own assertions. `DIR` must be new and outside the checkout |
-| `check-zip ZIP --config ...` | Member safety, secrets, exclusions, required paths, size, native ABI/ELF, dependency pins and closure, test-only leaks, optional major drift. Distribution metadata is read from top-level `*.dist-info/METADATA` only, and a `*.dist-info` or `*.egg-info` directory at any lower depth fails `METADATA_INVALID` |
+| `check-zip ZIP --config ...` | Member safety, secrets, exclusions, required paths, size, native ABI/ELF, dependency pins and closure, test-only leaks, optional major drift. Every member is read, so a corrupt one fails `UNREADABLE_ZIP` wherever it is. Member names must be canonical (`./a.py`, `pkg//a.py` fail `UNSAFE_MEMBER`). A CPython extension must be named `.cpython-XY-<machine>-linux-gnu.so` or `.abi3.so` for the `[target]` (`NATIVE_ABI`). Distribution metadata is read from top-level `*.dist-info/METADATA` only, and a `*.dist-info` or `*.egg-info` directory at any lower depth fails `METADATA_INVALID`. A `.serverless-validation-<stage>` directory is `TOOL_IN_ARTIFACT` |
 | `negatives ZIP --config ... --output DIR` | Mutates the ZIP once per standard defect and once per configured exclusion rule; fails unless each mutant is rejected with its intended code. A standard mutant the artifact cannot support (no SDK path in `[zip] required`, no `botocore` metadata) must be declared in `[negatives.not_applicable]` with a reason, and the reasons are written beside the results |
 | `extract ZIP DIR` | Extracts and proves the files on disk are exactly the members, byte for byte |
 | `offline-pytest --config ... --python APP_PYTHON [-- ARGS]` | Runs the application's suite in its own interpreter under the offline policy below |
@@ -56,7 +56,7 @@ in-container check's own code in its detail.
 
 ## Adapter: `lambda-validation.toml`
 
-Every section, key and value type below is checked when the file is read, nested tables included: an unknown or misspelled key fails as `ADAPTER_CONFIG` rather than silently dropping the check it configures. `verify` also needs `[build]` `stages` (non-empty), `config_path` and `config_text`, and `[container]` `image` and `smoke`.
+Every section, key and value type below is checked when the file is read, nested tables included: an unknown or misspelled key fails as `ADAPTER_CONFIG` rather than silently dropping the check it configures. So does a key that would never be read: an empty `pins`, `roots`, `accepted_majors` or `test_lock`, `pins` outside exact mode, `calendar_versioned` without `accepted_majors`, a `top_level` value with a slash or backslash, or a `config_path` placeholder other than `{stage}`. `verify` also needs `[build]` `stages` (non-empty), `config_path` and `config_text`, and `[container]` `image` and `smoke`.
 
 ```toml
 [target]
@@ -131,8 +131,10 @@ The smoke runs in the Lambda image with the extracted ZIP read-only at `/var/tas
 network, a read-only root, and this package mounted read-only at
 `/opt/nui-lambda-validation` on `PYTHONPATH`. Only the package directory is mounted, with no
 distribution metadata, so it cannot satisfy or pollute the application's own. `/proof`
-carries `pins.json` (exact mode) and `distributions.json`. Shared checks come first, then
-the service's own assertions:
+carries `pins.json` (exact mode only) and `distributions.json`; a roots-only adapter passes
+`check_inventory(None, manifest=runtime.load_proof("distributions.json"))` instead. A declared
+plain library must resolve inside `/var/task` and load. Shared checks come first, then the
+service's own assertions:
 
 ```python
 import sys
@@ -154,13 +156,19 @@ runtime.assert_no_conftest()
 
 The runner clears the environment (keeping only `PATH`, a temporary `HOME`, null AWS
 config files, the adapter's `passthrough_env` and `[offline.env]`, neither of which may name
-a variable the runner sets itself), disables plugin autoload, and replaces every
+a variable the runner sets itself, `PYTEST_ADDOPTS` or `PYTEST_PLUGINS`), disables plugin
+autoload, and replaces every
 `socket.socket` connect, connect_ex, sendto and sendmsg in the test interpreter, loopback and
 Unix sockets included, proving the guard with probes before tests start (each probe has a
 timeout, and any outcome but the guard's own refusal stops the run with exit 3). An xfailed
 test and a non-strict xpass count as skips: each fails the run unless its exact node id is in
-`allowed_skips`. Name resolution is
-not blocked. It runs the application's interpreter, which must be Python 3.11 or newer, with
+`allowed_skips`; so does a module-level skip, by its file's node id. Plugins load only from
+`[offline] plugins`: a positive `-p NAME` in the arguments stops the run (`-p no:NAME` is
+fine), as does any installed plugin found registered after configuration that the list does
+not name, however it arrived (a `conftest.py` `pytest_plugins`, say). `xdist` is refused,
+since its workers would run without the guard. A run that exits 0 counts only when the runner
+recorded it finishing with at least one test run, so `os._exit(0)` in a test or
+`--collect-only` fails with `OFFLINE_GUARD`. Name resolution is not blocked. It runs the application's interpreter, which must be Python 3.11 or newer, with
 `-P` so this package is not on the application's path; install this tool in its own
 environment, as above, or the suite can still import it. It is not an OS-level sandbox: a
 subprocess a test starts inherits the cleared environment but not the socket guard. Use the

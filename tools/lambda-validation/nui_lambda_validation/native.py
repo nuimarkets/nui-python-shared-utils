@@ -52,10 +52,10 @@ def inspect(bundle, python, machine, rules):
             if match.group(1) != tag:
                 fail("NATIVE_ABI", f"foreign Python ABI {match.group(0)}: {name}")
         if classify(name) == "extension":
-            # CPython imports only `.cpython-XY-<platform>.so` and `.abi3.so`; a debug (`312d`)
-            # or free-threaded (`312t`) build carries the right digits and still never loads.
-            if not re.search(rf"\.(?:cpython-{tag}-[^/]*|abi3)\.so$", PurePosixPath(name).name):
-                fail("NATIVE_ABI", f"extension is not cpython-{tag}-<platform> or abi3: {name}")
+            # The Lambda image imports only `.cpython-XY-<machine>-linux-gnu.so` and `.abi3.so`: a
+            # debug (`312d`) or free-threaded (`312t`) build, another machine or musl never loads.
+            if not re.search(rf"\.(?:cpython-{tag}-{machine}-linux-gnu|abi3)\.so$", PurePosixPath(name).name):
+                fail("NATIVE_ABI", f"extension is not cpython-{tag}-{machine}-linux-gnu or abi3: {name}")
             extensions.append(name)
         elif name in declared:
             libraries.append(name)

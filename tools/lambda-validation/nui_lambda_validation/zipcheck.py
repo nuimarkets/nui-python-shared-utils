@@ -18,6 +18,7 @@ TOOL_PACKAGE = "nui_lambda_validation"
 # Validation-only files an adapter keeps in its repository. None may ship.
 TOOL_FILES = ("lambda-validation.toml", "requirements-validation.txt")
 # Distribution metadata directories (`nui_lambda_validation-0.1.0.dist-info`, `.egg-info`).
+VERIFY_OUTPUT = ".serverless-validation-"
 TOOL_DIST_PREFIXES = tuple(f"{name}{sep}" for name in (TOOL_PACKAGE, "nui-lambda-validation") for sep in "-.")
 
 
@@ -41,6 +42,10 @@ def member_safety(names):
         path = PurePosixPath(name)
         if path.is_absolute() or ".." in path.parts or "\\" in name:
             fail("UNSAFE_MEMBER", name)
+        # Canonical names only: `./tests/a.py` or `pkg//a.py` extracts to a path no prefix rule or
+        # duplicate check written against the raw name would see.
+        if not path.parts or path.as_posix() != name.rstrip("/"):
+            fail("UNSAFE_MEMBER", f"not a canonical member name: {name!r}")
         parents.update(parent.as_posix() for parent in path.parents if parent.as_posix() != ".")
         if name.endswith("/"):
             parents.add(name.rstrip("/"))
@@ -100,7 +105,12 @@ def _tool_member(name):
     parts = PurePosixPath(name).parts
     if parts and parts[-1] in TOOL_FILES:
         return True
-    return any(part in (TOOL_PACKAGE, ".venv-validation") or part.startswith(TOOL_DIST_PREFIXES) for part in parts)
+    # `.serverless-validation-<stage>` is where verify packages each stage: a later stage that
+    # swept it up would ship the earlier stage's ZIP.
+    return any(
+        part in (TOOL_PACKAGE, ".venv-validation") or part.startswith(TOOL_DIST_PREFIXES + (VERIFY_OUTPUT,))
+        for part in parts
+    )
 
 
 def forbidden_paths(names, rules):
@@ -142,6 +152,9 @@ def inspect(archive, rules):
         forbidden_paths(names, rules.get("forbidden", {}))
         required_paths(names, rules.get("required", ()))
         total = size(infos, rules.get("uncompressed_limit", LAMBDA_UNZIPPED_LIMIT))
+        # Every member decompresses and matches its CRC, not only the ones later checks read.
+        for info in infos:
+            read_member(bundle, info)
     return dict(
         identity(archive),
         uncompressed_bytes=total,

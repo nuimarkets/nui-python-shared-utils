@@ -26,7 +26,7 @@ BASE_ENV = {
 BOOTSTRAP = Path(__file__).with_name("_offline_bootstrap.py")
 # Names the runner sets itself. An adapter that passed one through or overrode it would
 # hand the suite back a real HOME, real AWS config or plugin autoload.
-RESERVED_ENV = frozenset(BASE_ENV) | {"HOME", "NUI_LAMBDA_VALIDATION_POLICY"}
+RESERVED_ENV = frozenset(BASE_ENV) | {"HOME", "NUI_LAMBDA_VALIDATION_POLICY", "PYTEST_ADDOPTS", "PYTEST_PLUGINS"}
 
 
 def environment(home, passthrough=(), fixed=None, source=None):
@@ -57,10 +57,23 @@ def run(python, root, args, plugins=(), allowed_skips=(), passthrough=(), fixed_
     }
     # absolute(), not resolve(): a venv's python is a symlink, and resolving it leaves the venv.
     python = Path(python).absolute()
-    with tempfile.TemporaryDirectory(prefix="lambda-validation-home-") as home:
+    with (
+        tempfile.TemporaryDirectory(prefix="lambda-validation-home-") as home,
+        tempfile.TemporaryDirectory(prefix="lambda-validation-result-") as box,
+    ):
+        result = Path(box) / "result.json"
+        policy["result"] = str(result)
         env = environment(home, passthrough, fixed_env)
         env["NUI_LAMBDA_VALIDATION_POLICY"] = json.dumps(policy)
         try:
-            return subprocess.run([str(python), "-P", str(BOOTSTRAP)], cwd=policy["root"], env=env).returncode
+            status = subprocess.run([str(python), "-P", str(BOOTSTRAP)], cwd=policy["root"], env=env).returncode
         except OSError as error:
             fail("OFFLINE_GUARD", f"cannot run the application interpreter {python}: {error}")
+        if status == 0:
+            try:
+                record = json.loads(result.read_text())
+            except (OSError, ValueError):
+                fail("OFFLINE_GUARD", "the suite exited 0 without finishing (no result from the runner)")
+            if record.get("status") != 0 or not record.get("ran"):
+                fail("OFFLINE_GUARD", f"the suite exited 0 but the runner recorded {record}")
+        return status

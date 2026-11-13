@@ -8,6 +8,7 @@ from pathlib import Path
 from . import artifact
 from .errors import ValidationError, fail
 from .native import ELF_MACHINE
+from .native import is_native as native_name
 from .zipcheck import SECRET_FILE_PATTERN, TOOL_PACKAGE, open_zip, read_member
 
 
@@ -78,7 +79,8 @@ def plans(adapter, names):
     for dist, roots in sorted(deps.get("test_only", {}).items()):
         if not roots:
             fail("ADAPTER_CONFIG", f"[dependencies.test_only] {dist} lists no top-level names")
-        root = sorted(roots)[0]
+        # A native root would be rejected by the native checks first, so it cannot show the leak.
+        root = sorted(roots, key=lambda name: (native_name(name), name))[0]
         member = root if "." in root else f"{root}/__init__.py"
         found[f"test-only-leak-{dist}"] = ("TEST_ONLY_LEAK", adding(member, b""))
     # One probe per configured exclusion rule. Probe names keep the last component

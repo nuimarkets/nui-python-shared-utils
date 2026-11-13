@@ -60,6 +60,10 @@ def plugin_inventory(policy):
     ``pytest11`` entry point must be loaded or declared not loaded."""
     from importlib.metadata import entry_points
 
+    # xdist workers are new interpreters this guard never reaches.
+    if "xdist" in policy["plugins"]:
+        print("OFFLINE_GUARD: xdist workers run without the network guard", file=sys.stderr)
+        raise SystemExit(3)
     installed = sorted({entry.name for entry in entry_points(group="pytest11")})
     known = set(policy["plugins"]) | set(policy["not_loaded"])
     unlisted = [name for name in installed if name not in known]
@@ -67,7 +71,39 @@ def plugin_inventory(policy):
     if unlisted or absent:
         print(f"OFFLINE_GUARD: pytest plugins unlisted={unlisted} listed-but-absent={absent}", file=sys.stderr)
         raise SystemExit(3)
+    # Plugins load only through the policy list: a `-p NAME` in the arguments would load one
+    # the adapter declared not loaded. `-p no:NAME` disables, so it stays allowed.
+    args = policy["args"]
+    for index, arg in enumerate(args):
+        value = args[index + 1] if arg == "-p" and index + 1 < len(args) else arg[2:] if arg.startswith("-p") else None
+        if value is not None and not value.startswith("no:"):
+            print(f"OFFLINE_GUARD: load plugins through [offline] plugins, not {arg} in the arguments", file=sys.stderr)
+            raise SystemExit(3)
     return installed
+
+
+class PluginPolicy:
+    """After configuration, no installed plugin outside the policy list is registered, however it
+    arrived (an argument, an environment variable, an import)."""
+
+    def __init__(self, policy):
+        self.policy = policy
+
+    def pytest_configure(self, config):
+        from importlib.metadata import entry_points
+
+        import pytest
+
+        manager = config.pluginmanager
+        modules = {getattr(plugin, "__name__", None) for plugin in manager.get_plugins()}
+        loaded = sorted(
+            entry.name
+            for entry in entry_points(group="pytest11")
+            if entry.name not in self.policy["plugins"] and (manager.has_plugin(entry.name) or entry.module in modules)
+        )
+        if loaded:
+            print(f"OFFLINE_GUARD: plugins loaded outside [offline] plugins: {loaded}", file=sys.stderr)
+            pytest.exit(f"plugins loaded outside the policy: {loaded}", returncode=3)
 
 
 def main():
@@ -99,6 +135,7 @@ def main():
         def __init__(self):
             self.unexpected = []
             self.allowed_seen = []
+            self.ran = 0
 
         def pytest_runtest_logreport(self, report):
             # An xfail reports as skipped with ``wasxfail`` and a non-strict xpass as passed
@@ -106,10 +143,13 @@ def main():
             # counts an xfail as skipped, and marking a failing test xfail must not turn CI green.
             if report.skipped or (report.passed and hasattr(report, "wasxfail")):
                 (self.allowed_seen if report.nodeid in allowed else self.unexpected).append(report.nodeid)
+            if report.when == "call":
+                self.ran += 1
 
         def pytest_collectreport(self, report):
             if report.skipped:
-                self.unexpected.append(report.nodeid or "<collection>")
+                nodeid = report.nodeid or "<collection>"
+                (self.allowed_seen if nodeid in allowed else self.unexpected).append(nodeid)
 
         def pytest_sessionfinish(self, session, exitstatus):
             if self.unexpected:
@@ -127,7 +167,13 @@ def main():
     arguments = []
     for plugin in policy["plugins"]:
         arguments += ["-p", plugin]
-    return pytest.main(arguments + policy["args"], plugins=[SkipPolicy()])
+    skips = SkipPolicy()
+    status = int(pytest.main(arguments + policy["args"], plugins=[skips, PluginPolicy(policy)]))
+    # The launcher trusts a 0 only beside this record, so a run that never reached here
+    # (`os._exit(0)` in a test) or ran no test (`--collect-only`) cannot pass.
+    with open(policy["result"], "w") as record:
+        json.dump({"status": status, "ran": skips.ran}, record)
+    return status
 
 
 if __name__ == "__main__":

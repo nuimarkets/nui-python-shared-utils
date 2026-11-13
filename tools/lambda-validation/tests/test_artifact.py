@@ -567,11 +567,10 @@ def test_corrupt_deflated_member_is_coded(tmp_path, adapter):
     assert code_of(extract, bad, tmp_path / "out") == "UNREADABLE_ZIP"
 
 
-def test_negatives_code_a_member_check_zip_never_reads(tmp_path, adapter):
-    # check-zip reads metadata and native headers only, so this artifact passes it; the mutants copy
-    # every member, and the corrupt one must stop the run with a code, not a traceback.
+def test_check_zip_reads_every_member(tmp_path, adapter):
+    # Not only the metadata and native headers later checks read: a corrupt source file fails too.
     bad = _corrupt_deflated(tmp_path, "handler.py")
-    artifact.check(bad, adapter)
+    assert code_of(artifact.check, bad, adapter) == "UNREADABLE_ZIP"
     assert code_of(negatives.run, bad, adapter, tmp_path / "neg") == "UNREADABLE_ZIP"
 
 
@@ -721,3 +720,88 @@ def test_calendar_versioned_presence_and_shape():
 def test_calendar_versioned_needs_a_snapshot_and_a_reason(repo, extra):
     (repo / "lambda-validation.toml").write_text(ADAPTER + extra)
     assert code_of(Adapter, repo / "lambda-validation.toml") == "ADAPTER_CONFIG"
+
+
+@pytest.mark.parametrize(
+    "members",
+    [
+        {"./tests/a.py": b""},
+        {"./handler.py": b""},
+        {"pkg//a.py": b""},
+        {"pkg/./a.py": b""},
+        {"pkg/sub": b"", "pkg//sub/": b""},
+    ],
+)
+def test_non_canonical_member_names(tmp_path, adapter, members):
+    # Each extracts to a path the prefix rules and duplicate check, written against raw names, never see.
+    assert code_of(artifact.check, mutate(tmp_path, members), adapter) == "UNSAFE_MEMBER"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "other.cpython-312-aarch64-linux-gnu.so",
+        "other.cpython-312-x86_64-linux-musl.so",
+        "other.cpython-312.so",
+    ],
+)
+def test_extension_platform_suffix_is_the_target(tmp_path, adapter, name):
+    assert code_of(artifact.check, mutate(tmp_path, {name: elf()}), adapter) == "NATIVE_ABI"
+
+
+def test_a_verify_stage_directory_is_tool_material(tmp_path, adapter):
+    bad = mutate(tmp_path, {".serverless-validation-dev/app.zip": b""})
+    assert code_of(artifact.check, bad, adapter) == "TOOL_IN_ARTIFACT"
+
+
+@pytest.mark.parametrize(
+    "old, new",
+    [
+        ('mode = "exact"\npins = "requirements.txt"', 'mode = "roots-only"\npins = "requirements.txt"'),
+        ('roots = "requirements.in"', 'roots = ""'),
+        ('roots = "requirements.in"', 'roots = "requirements.in"\naccepted_majors = ""'),
+        (
+            'roots = "requirements.in"',
+            'roots = "requirements.in"\ntest_lock = " "\n[dependencies.test_only]\npytest = ["pytest"]',
+        ),
+        ("[zip.forbidden]\n", '[zip.forbidden]\ntop_level = ["scripts\\\\"]\n'),
+    ],
+)
+def test_adapter_refuses_keys_that_would_never_be_read(repo, old, new):
+    text = ADAPTER
+    assert old in text
+    (repo / "lambda-validation.toml").write_text(text.replace(old, new, 1))
+    assert code_of(Adapter, repo / "lambda-validation.toml") == "ADAPTER_CONFIG"
+
+
+@pytest.mark.parametrize("path", ["config/{other}.yml", "config/{}.yml", "config/{stage.yml"])
+def test_config_path_names_only_the_stage(repo, path):
+    (repo / "lambda-validation.toml").write_text(
+        ADAPTER + f'[build]\nstages = ["dev"]\nconfig_path = "{path}"\nconfig_text = "x"\n'
+    )
+    assert code_of(Adapter, repo / "lambda-validation.toml") == "ADAPTER_CONFIG"
+
+
+def test_extras_reached_later_are_walked_again(tmp_path, repo):
+    # c is reached first without its extra (from a), then with [x] (from b): the [x] edge to d
+    # must still be walked, so the absent d is found.
+    adapter = _roots_only(repo, "b>=1\na>=1\nboto3>=1.34\n")
+    members = {k: v for k, v in base_members().items() if not k.startswith(("app_lib", "helper"))}
+    members["c/_speed.cpython-312-x86_64-linux-gnu.so"] = elf()
+    members.update(_dist_change("a", "1.0", ["c>=1"]))
+    members.update(_dist_change("b", "1.0", ["c[x]>=1"]))
+    members.update(_dist_change("c", "1.0", ["d>=1; extra == 'x'"]))
+    with pytest.raises(ValidationError) as caught:
+        artifact.check(write_zip(tmp_path / "extras.zip", members), adapter)
+    assert caught.value.code == "CLOSURE_MISSING" and caught.value.detail == "d"
+
+
+def test_test_only_negative_prefers_a_non_native_root(tmp_path, repo, good_zip):
+    (repo / "requirements-test.txt").write_text(PINS_TEST)
+    (repo / "lambda-validation.toml").write_text(
+        ADAPTER
+        + 'test_lock = "requirements-test.txt"\n[dependencies.test_only]\n'
+        + 'pytest = ["_cext.cpython-312-x86_64-linux-gnu.so", "pytest"]\n'
+    )
+    results = negatives.run(good_zip, Adapter(repo / "lambda-validation.toml"), tmp_path / "neg")
+    assert results["test-only-leak-pytest"]["code"] == "TEST_ONLY_LEAK"

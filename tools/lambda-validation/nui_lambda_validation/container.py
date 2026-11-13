@@ -1,6 +1,7 @@
 """Run a smoke script against an extracted artifact in a matching Lambda image, offline and read-only."""
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -68,8 +69,12 @@ def run(command, log):
 def ensure_image(image, machine):
     """Pull ``image`` for the target platform when the host does not have it, so a cold host
     builds the same as a warm one and consumers carry no pull step of their own."""
-    if subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode == 0:
+    inspect = subprocess.run(["docker", "image", "inspect", image], capture_output=True, text=True)
+    if inspect.returncode == 0:
         return image
+    # Pull only on a confirmed absence: a daemon or permission error is not a missing image.
+    if not re.search(r"No such (image|object)", inspect.stderr):
+        fail("BUILD", f"cannot inspect image {image}: {inspect.stderr.strip()[:300]}")
     result = subprocess.run(["docker", "pull", "--platform", PLATFORM[machine], image], capture_output=True, text=True)
     if result.returncode != 0:
         fail("BUILD", f"cannot pull image {image}: {result.stderr.strip()[:300]}")

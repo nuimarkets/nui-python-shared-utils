@@ -83,6 +83,7 @@ def stubs(tmp_path, monkeypatch):
         target = tree / f".serverless-validation-{stage}"
         target.mkdir()
         (target / "app.zip").write_bytes(good.read_bytes())
+        (target / "cloudformation-template-update-stack.json").write_text(json.dumps({"stage": stage}))
         return target / "app.zip", target / "cloudformation-template-update-stack.json"
 
     def ensure(image, machine):
@@ -194,7 +195,11 @@ def test_adapter_must_sit_at_the_repository_top(tmp_path, project, stubs):
     nested = project / "sub"
     nested.mkdir()
     (nested / "lambda-validation.toml").write_text(ADAPTER + BUILD)
-    assert code_of(cli.verify, Adapter(nested / "lambda-validation.toml"), tmp_path / "out") == "BUILD"
+    git(project, "add", "sub")
+    git(project, "commit", "-q", "-m", "nested adapter")
+    with pytest.raises(ValidationError) as caught:
+        cli.verify(Adapter(nested / "lambda-validation.toml"), tmp_path / "out")
+    assert caught.value.code == "BUILD" and "top of a git repository" in caught.value.detail
 
 
 def test_substitution_count_is_exact(tmp_path):
@@ -376,11 +381,11 @@ def test_verify_binds_the_tool_to_the_committed_pin(tmp_path, project, stubs):
 def test_ensure_image_pulls_only_when_missing(monkeypatch, machine, platform):
     commands = []
 
-    def docker(present, pulls):
+    def docker(present, pulls, present_error="Error response from daemon: No such image: img:1"):
         def run(command, **kwargs):
             commands.append(command)
             if command[1:3] == ["image", "inspect"]:
-                return subprocess.CompletedProcess(command, 0 if present else 1, stdout="", stderr="No such image")
+                return subprocess.CompletedProcess(command, 0 if present else 1, stdout="", stderr=present_error)
             return subprocess.CompletedProcess(command, 0 if pulls else 1, stdout="", stderr="denied: pull access")
 
         return run
@@ -396,3 +401,32 @@ def test_ensure_image_pulls_only_when_missing(monkeypatch, machine, platform):
     with pytest.raises(ValidationError) as caught:
         container.ensure_image("img:1", machine)
     assert caught.value.code == "BUILD" and "denied: pull access" in caught.value.detail
+
+
+def test_ensure_image_does_not_pull_over_an_inspect_error(monkeypatch):
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="permission denied while trying to connect")
+
+    monkeypatch.setattr(container.subprocess, "run", run)
+    with pytest.raises(ValidationError) as caught:
+        container.ensure_image("img:1", "x86_64")
+    assert caught.value.code == "BUILD" and "permission denied" in caught.value.detail
+    assert all(command[1] != "pull" for command in commands)
+
+
+def test_verify_runs_only_the_named_stage_and_copies_its_template(tmp_path, project, stubs):
+    manifest = cli.verify(Adapter(project / "lambda-validation.toml"), tmp_path / "out", stages=["prod"])
+    assert [call["stage"] for call in stubs["package"]] == ["prod"]
+    assert [a["stage"] for a in manifest["artifacts"]] == ["prod"]
+    assert json.loads((tmp_path / "out" / "template-prod.json").read_text()) == {"stage": "prod"}
+    assert not (tmp_path / "out" / "template-dev.json").exists()
+
+
+def test_verify_output_must_be_outside_the_checkout(project, stubs):
+    with pytest.raises(ValidationError) as caught:
+        cli.verify(Adapter(project / "lambda-validation.toml"), project / "evidence")
+    assert caught.value.code == "BUILD" and "outside the checkout" in caught.value.detail
+    assert not (project / "evidence").exists()
