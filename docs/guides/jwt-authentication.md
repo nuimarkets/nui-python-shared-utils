@@ -233,7 +233,7 @@ answers 401 as for any other invalid token.
 | `enforce` | Both | `revoked`, and `unavailable` when `TOKEN_REVOCATION_FAIL` is `closed` |
 
 With `TOKEN_STATUS_URL` unset the check is off whatever `TOKEN_REVOCATION_FAIL` says, so `fail=closed` without a
-URL refuses nothing and logs a `not_configured` warning. The 30 second active TTL, 60 second revoked grace,
+URL refuses nothing; a mode of `shadow` or `enforce` without a URL logs a `not_configured` warning. The 30 second active TTL, 60 second revoked grace,
 10 second breaker, 2 second deadline, 1 second connect timeout and 1% sample rate are fixed in this module.
 
 The machine token is fetched on the first check that misses the cache, with a form-encoded
