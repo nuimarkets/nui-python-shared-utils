@@ -164,8 +164,9 @@ timeout, and any outcome but the guard's own refusal stops the run with exit 3).
 test and a non-strict xpass count as skips: each fails the run unless its exact node id is in
 `allowed_skips`; so does a module-level skip, by its file's node id. Plugins load only from
 `[offline] plugins`: a positive `-p NAME` in the arguments stops the run (`-p no:NAME` is
-fine), as does any installed plugin found registered after configuration that the list does
-not name, however it arrived (a `conftest.py` `pytest_plugins`, say). `xdist` is refused,
+fine), as does any installed plugin the list does not name that registers at any point,
+however it arrives: a `conftest.py` or test module's `pytest_plugins`, or an import while
+tests run. `xdist` is refused,
 since its workers would run without the guard. A run that exits 0 counts only when the runner
 recorded it finishing with at least one test run, so `os._exit(0)` in a test or
 `--collect-only` fails with `OFFLINE_GUARD`. Name resolution is not blocked. It runs the application's interpreter, which must be Python 3.11 or newer, with

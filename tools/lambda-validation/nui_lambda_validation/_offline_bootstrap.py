@@ -83,27 +83,34 @@ def plugin_inventory(policy):
 
 
 class PluginPolicy:
-    """After configuration, no installed plugin outside the policy list is registered, however it
-    arrived (an argument, an environment variable, an import)."""
+    """No installed plugin outside the policy list may register, however it arrives (an argument,
+    an environment variable, a conftest or test module's ``pytest_plugins``, an import mid-run).
+    The hook is historic, so it also sees every plugin registered before this one."""
 
     def __init__(self, policy):
-        self.policy = policy
-
-    def pytest_configure(self, config):
         from importlib.metadata import entry_points
 
-        import pytest
+        self.forbidden = {
+            entry.name: entry.module for entry in entry_points(group="pytest11") if entry.name not in policy["plugins"]
+        }
+        self.loaded = []
 
-        manager = config.pluginmanager
-        modules = {getattr(plugin, "__name__", None) for plugin in manager.get_plugins()}
-        loaded = sorted(
-            entry.name
-            for entry in entry_points(group="pytest11")
-            if entry.name not in self.policy["plugins"] and (manager.has_plugin(entry.name) or entry.module in modules)
-        )
-        if loaded:
-            print(f"OFFLINE_GUARD: plugins loaded outside [offline] plugins: {loaded}", file=sys.stderr)
-            pytest.exit(f"plugins loaded outside the policy: {loaded}", returncode=3)
+    def pytest_plugin_registered(self, plugin, plugin_name, manager):
+        module = getattr(plugin, "__name__", None)
+        for name, entry_module in self.forbidden.items():
+            if (plugin_name == name or module == entry_module) and name not in self.loaded:
+                self.loaded.append(name)
+
+    def report(self):
+        print(f"OFFLINE_GUARD: plugins loaded outside [offline] plugins: {sorted(self.loaded)}", file=sys.stderr)
+
+    def pytest_collection_finish(self, session):
+        # Before any test runs: everything configuration and collection registered.
+        if self.loaded:
+            import pytest
+
+            self.report()
+            pytest.exit("plugins loaded outside the policy", returncode=3)
 
 
 def main():
@@ -168,7 +175,12 @@ def main():
     for plugin in policy["plugins"]:
         arguments += ["-p", plugin]
     skips = SkipPolicy()
-    status = int(pytest.main(arguments + policy["args"], plugins=[skips, PluginPolicy(policy)]))
+    plugins = PluginPolicy(policy)
+    status = int(pytest.main(arguments + policy["args"], plugins=[skips, plugins]))
+    if plugins.loaded and status != 3:
+        # Registered while tests ran, after the collection check.
+        plugins.report()
+        status = 3
     # The launcher trusts a 0 only beside this record, so a run that never reached here
     # (`os._exit(0)` in a test) or ran no test (`--collect-only`) cannot pass.
     with open(policy["result"], "w") as record:

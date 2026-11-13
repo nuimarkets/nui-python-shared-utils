@@ -730,6 +730,7 @@ def test_calendar_versioned_needs_a_snapshot_and_a_reason(repo, extra):
         {"pkg//a.py": b""},
         {"pkg/./a.py": b""},
         {"pkg/sub": b"", "pkg//sub/": b""},
+        {"pkg/sub//": b""},
     ],
 )
 def test_non_canonical_member_names(tmp_path, adapter, members):

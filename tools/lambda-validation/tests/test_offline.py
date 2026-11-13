@@ -286,7 +286,8 @@ def fake_plugin(tmp_path):
     site = tmp_path / "site"
     (site / "fakeplug-1.0.dist-info").mkdir(parents=True)
     (site / "fakeplug-1.0.dist-info" / "METADATA").write_text("Metadata-Version: 2.1\nName: fakeplug\nVersion: 1.0\n")
-    (site / "fakeplug-1.0.dist-info" / "entry_points.txt").write_text("[pytest11]\nfakeplug = fakeplug\n")
+    # The entry point's name differs from its module, so each route must be matched by the right one.
+    (site / "fakeplug-1.0.dist-info" / "entry_points.txt").write_text("[pytest11]\nfakeplug_ep = fakeplug\n")
     (site / "fakeplug.py").write_text("")
     return {"PYTHONPATH": str(site)}
 
@@ -294,17 +295,31 @@ def fake_plugin(tmp_path):
 @pytest.mark.parametrize(
     "args, conftest, message",
     [
-        (["-p", "fakeplug"], None, "not -p in the arguments"),
-        (["-pfakeplug"], None, "not -pfakeplug in the arguments"),
-        ([], "pytest_plugins = ['fakeplug']\n", "plugins loaded outside [offline] plugins: ['fakeplug']"),
+        (["-p", "fakeplug_ep"], None, "not -p in the arguments"),
+        (["-pfakeplug_ep"], None, "not -pfakeplug_ep in the arguments"),
+        ([], "pytest_plugins = ['fakeplug']\n", "plugins loaded outside [offline] plugins: ['fakeplug_ep']"),
+        (
+            [],
+            "MODULE:pytest_plugins = ['fakeplug']\n\ndef test_x():\n    pass\n",
+            "outside [offline] plugins: ['fakeplug_ep']",
+        ),
+        (
+            [],
+            "MODULE:def test_late(request):\n    request.config.pluginmanager.import_plugin('fakeplug')\n",
+            "outside [offline] plugins: ['fakeplug_ep']",
+        ),
     ],
 )
 def test_a_plugin_declared_not_loaded_cannot_load_another_way(project, tmp_path, capfd, args, conftest, message):
     env = fake_plugin(tmp_path)
-    if conftest:
+    # A conftest's pytest_plugins registers at configuration; a test module's only during
+    # collection; an import inside a test only while tests run.
+    if conftest and conftest.startswith("MODULE:"):
+        (project / "tests" / "test_plugin_route.py").write_text(conftest[len("MODULE:") :])
+    elif conftest:
         (project / "tests" / "conftest.py").write_text(conftest)
     declared = {name: "unused" for name in installed_plugins()}
-    declared["fakeplug"] = "declared not loaded"
+    declared["fakeplug_ep"] = "declared not loaded"
     skips = ["tests/test_skips.py::test_allowed"]
     run_args = ["-q", "-p", "no:cacheprovider", *args, "tests"]
     status = offline.run(

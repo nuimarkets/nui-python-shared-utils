@@ -44,11 +44,11 @@ def member_safety(names):
             fail("UNSAFE_MEMBER", name)
         # Canonical names only: `./tests/a.py` or `pkg//a.py` extracts to a path no prefix rule or
         # duplicate check written against the raw name would see.
-        if not path.parts or path.as_posix() != name.rstrip("/"):
+        if not path.parts or path.as_posix() != (name[:-1] if name.endswith("/") else name):
             fail("UNSAFE_MEMBER", f"not a canonical member name: {name!r}")
         parents.update(parent.as_posix() for parent in path.parents if parent.as_posix() != ".")
         if name.endswith("/"):
-            parents.add(name.rstrip("/"))
+            parents.add(name[:-1])
     collisions = sorted(name for name in seen if not name.endswith("/") and name in parents)
     if collisions:
         fail("UNSAFE_MEMBER", f"file is also a directory of other members: {collisions[:10]}")
