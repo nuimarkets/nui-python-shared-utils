@@ -35,7 +35,7 @@ One-call authentication for API Gateway Lambda handlers. Extracts the Bearer tok
 - **event** — API Gateway Lambda proxy event (v1 REST or v2 HTTP API)
 - **secret_name** — Secrets Manager secret name (falls back to `JWT_PUBLIC_KEY_SECRET` env var)
 - **Returns** — Decoded claims dict
-- **Raises** — `AuthenticationError` on any failure (missing header, bad token, expired, bad signature, missing key)
+- **Raises** — `AuthenticationError` on any failure (missing header, bad token, expired, bad signature, missing key), or when the token status check refuses the token (see [Token Status Check](#token-status-check-revocation))
 
 ### `validate_jwt(token, public_key) -> dict`
 
@@ -207,7 +207,9 @@ Secrets Manager read of its client), the status call and its body. Each TCP conn
 `https`, and the socket timeout is set to the time left before every receive, so a server that stalls or drips
 bytes cannot hold a request past the deadline. DNS lookups and the Secrets Manager read run on a daemon thread
 that the check stops waiting for at the deadline. The status body is read up to 1 KB and the token endpoint's
-up to 16 KB, since an RS256 access token alone can pass 1 KB.
+up to 16 KB, since an RS256 access token alone can pass 1 KB. The client connects to the URL's host directly
+and does not read `HTTP_PROXY`, `HTTPS_PROXY` or `NO_PROXY`, so an egress path that needs a proxy reports every
+call as `unavailable`.
 
 The check never raises. A refusal in `enforce` is an `AuthenticationError` from `require_auth`, so `check_auth`
 answers 401 as for any other invalid token.
@@ -230,9 +232,14 @@ answers 401 as for any other invalid token.
 | `shadow` | Both, writing the cache as `enforce` would | Nothing; logs `would reject` instead |
 | `enforce` | Both | `revoked`, and `unavailable` when `TOKEN_REVOCATION_FAIL` is `closed` |
 
+With `TOKEN_STATUS_URL` unset the check is off whatever `TOKEN_REVOCATION_FAIL` says, so `fail=closed` without a
+URL refuses nothing and logs a `not_configured` warning. The 30 second active TTL, 60 second revoked grace,
+10 second breaker, 2 second deadline, 1 second connect timeout and 1% sample rate are fixed in this module.
+
 The machine token is fetched on the first check that misses the cache, with a form-encoded
-`grant_type=client_credentials` request, and reused until a day before it expires (from `expires_in`). If a
-refetch fails while the current token is still valid, the current one is used and a warning is logged. A client
+`grant_type=client_credentials` request, and reused until a day before it expires (from `expires_in`). A
+refetch while the current token is still valid gets only half the time left, and if it fails the current one is
+used and a warning is logged, so a stalled token endpoint still leaves time for the status call. A client
 whose tokens live a day or less is therefore refetched on every check that misses the cache. A new client secret
 in Secrets Manager reaches a warm process only after it restarts.
 
