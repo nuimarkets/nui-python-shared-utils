@@ -900,9 +900,24 @@ class TestLogging:
 
         monkeypatch.setattr(ts.log, "log", broken)
         monkeypatch.setattr(ts, "SAMPLE_RATE", 1.0)
+        monkeypatch.setenv("TOKEN_REVOCATION_FAIL", "shut")  # also logs the settings warning
         issuer.status_default = answer(False)
 
         assert ts.should_reject_token(claims_for(clock)) is True
+
+    def test_a_failing_logger_during_a_token_refresh_keeps_the_current_token(self, issuer, monkeypatch, clock):
+        def broken(*args, **kwargs):
+            raise RuntimeError("log sink down")
+
+        issuer.token_queue = [token_response("first", expires_in=2 * 86_400), HttpResponse(500, b"")]
+        check(clock, jti="j1")
+        clock.advance(86_400 + 10)
+        monkeypatch.setattr(ts.log, "log", broken)
+
+        result = check(clock, jti="j2")
+
+        assert result.status is TokenStatus.ACTIVE
+        assert issuer.bearer(1) == "Bearer first"
 
     def test_secret_and_tokens_never_reach_a_log(self, issuer, monkeypatch, clock, caplog, mock_secrets_manager):
         monkeypatch.setattr(ts, "SAMPLE_RATE", 1.0)
