@@ -65,6 +65,17 @@ def run(command, log):
         return subprocess.run(command, stdout=output, stderr=subprocess.STDOUT).returncode
 
 
+def ensure_image(image, machine):
+    """Pull ``image`` for the target platform when the host does not have it, so a cold host
+    builds the same as a warm one and consumers carry no pull step of their own."""
+    if subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode == 0:
+        return image
+    result = subprocess.run(["docker", "pull", "--platform", PLATFORM[machine], image], capture_output=True, text=True)
+    if result.returncode != 0:
+        fail("BUILD", f"cannot pull image {image}: {result.stderr.strip()[:300]}")
+    return image
+
+
 def image_digests(image):
     """Repository digests of a local image. An image that cannot be inspected, or has no
     digest to record, fails rather than leaving the manifest without its provenance."""

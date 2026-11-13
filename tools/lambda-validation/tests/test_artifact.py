@@ -541,3 +541,183 @@ def test_extraction_write_failure_is_coded(tmp_path, good_zip):
     blocker = tmp_path / "blocker"
     blocker.write_text("a file, so nothing can be created beneath it")
     assert code_of(extract, good_zip, blocker / "out") == "UNREADABLE_ZIP"
+
+
+def _corrupt_deflated(tmp_path, member):
+    """Write the base artifact with ``member`` deflated, then break its deflate stream."""
+    path = tmp_path / "deflated.zip"
+    with zipfile.ZipFile(path, "w") as bundle:
+        for name, data in base_members().items():
+            bundle.writestr(name, data, zipfile.ZIP_DEFLATED if name == member else zipfile.ZIP_STORED)
+    with zipfile.ZipFile(path) as bundle:
+        info = bundle.getinfo(member)
+    data = bytearray(path.read_bytes())
+    start = info.header_offset + 30 + len(info.filename.encode()) + len(info.extra)
+    data[start] = 0xFF  # an invalid deflate block type: zlib.error, not a CRC failure
+    path.write_bytes(bytes(data))
+    with zipfile.ZipFile(path) as bundle, pytest.raises(Exception) as raw:
+        bundle.read(member)
+    assert type(raw.value).__module__ == "zlib"
+    return path
+
+
+def test_corrupt_deflated_member_is_coded(tmp_path, adapter):
+    bad = _corrupt_deflated(tmp_path, "helper-2.1.0.dist-info/METADATA")
+    assert code_of(artifact.check, bad, adapter) == "UNREADABLE_ZIP"
+    assert code_of(extract, bad, tmp_path / "out") == "UNREADABLE_ZIP"
+
+
+def test_negatives_code_a_member_check_zip_never_reads(tmp_path, adapter):
+    # check-zip reads metadata and native headers only, so this artifact passes it; the mutants copy
+    # every member, and the corrupt one must stop the run with a code, not a traceback.
+    bad = _corrupt_deflated(tmp_path, "handler.py")
+    artifact.check(bad, adapter)
+    assert code_of(negatives.run, bad, adapter, tmp_path / "neg") == "UNREADABLE_ZIP"
+
+
+@pytest.mark.parametrize("order", [("pkg", "pkg/"), ("pkg/", "pkg")])
+def test_directory_entry_beside_a_file_of_the_same_name(tmp_path, adapter, order):
+    members = base_members()
+    for name in order:
+        members[name] = b""
+    assert code_of(artifact.check, write_zip(tmp_path / "clash.zip", members), adapter) == "UNSAFE_MEMBER"
+
+
+@pytest.mark.parametrize(
+    "member",
+    [
+        "nested/boto3-1.44.1.dist-info/METADATA",
+        "botocore-1.44.1.dist-info/boto3-1.44.1.dist-info/METADATA",
+        "vendor/helper-2.1.0.egg-info/PKG-INFO",
+        "vendor/stray.dist-info/",
+    ],
+)
+def test_distribution_metadata_below_the_top_level(tmp_path, adapter, member):
+    data = metadata("boto3", "1.44.1") if member.endswith("METADATA") else b""
+    bad = mutate(tmp_path, {member: data})
+    with pytest.raises(ValidationError) as caught:
+        artifact.check(bad, adapter)
+    assert caught.value.code == "METADATA_INVALID" and "below the top level" in caught.value.detail
+
+
+def test_files_inside_a_top_level_dist_info_still_pass(tmp_path, adapter):
+    artifact.check(mutate(tmp_path, {"boto3-1.44.1.dist-info/licenses/LICENSE": b"MIT"}), adapter)
+
+
+TOP_LEVEL = '[zip.forbidden]\nprefixes = ["tests/", "."]\ntop_level = ["scripts", "service-account.json"]\n'
+
+
+def _top_level(repo):
+    text = ADAPTER.replace('[zip.forbidden]\nprefixes = ["tests/", "."]\n', TOP_LEVEL)
+    (repo / "lambda-validation.toml").write_text(text)
+    return Adapter(repo / "lambda-validation.toml")
+
+
+@pytest.mark.parametrize(
+    "member, expected",
+    [
+        ("scripts", "FORBIDDEN_PATH"),
+        ("scripts/deploy.sh", "FORBIDDEN_PATH"),
+        ("scripts/", "FORBIDDEN_PATH"),
+        ("service-account.json/x.txt", "FORBIDDEN_PATH"),
+        ("pkg/scripts", None),
+        ("scriptsx", None),
+    ],
+)
+def test_top_level_names_are_exact_first_components(tmp_path, repo, member, expected):
+    adapter = _top_level(repo)
+    bad = mutate(tmp_path, {member: b""})
+    if expected is None:
+        artifact.check(bad, adapter)
+    else:
+        assert code_of(artifact.check, bad, adapter) == expected
+
+
+def test_top_level_negatives_probe_the_bare_name(tmp_path, repo, good_zip, monkeypatch):
+    adapter = _top_level(repo)
+    added = {}
+    real = negatives._copy
+
+    def spy(source, target, add=(), drop=lambda name: False):
+        added[Path(target).name] = [member for member, _ in add]
+        return real(source, target, add, drop)
+
+    monkeypatch.setattr(negatives, "_copy", spy)
+    results = negatives.run(good_zip, adapter, tmp_path / "neg")
+    assert results["forbidden-top_level-scripts"]["code"] == "FORBIDDEN_PATH"
+    assert results["forbidden-top_level-service-account.json"]["code"] == "FORBIDDEN_PATH"
+    probes = {member for members in added.values() for member in members}
+    # The bare file is what the rule adds; a secret-shaped name is probed as a directory child.
+    assert {"scripts", "service-account.json/x.txt"} <= probes
+
+
+@pytest.mark.parametrize("names", ['["a/b"]', '[""]', '[".."]'])
+def test_top_level_takes_bare_components(repo, names):
+    text = ADAPTER.replace("[zip.forbidden]\n", f"[zip.forbidden]\ntop_level = {names}\n")
+    (repo / "lambda-validation.toml").write_text(text)
+    assert code_of(Adapter, repo / "lambda-validation.toml") == "ADAPTER_CONFIG"
+
+
+def test_declared_plain_library_is_not_read_as_a_python_tag(tmp_path, repo):
+    (repo / "lambda-validation.toml").write_text(
+        ADAPTER.replace(
+            'plain_libraries = ["vendor/libplain.so"]',
+            'plain_libraries = ["vendor/libplain.so", "vendor/libcp311x.so"]',
+        )
+    )
+    adapter = Adapter(repo / "lambda-validation.toml")
+    artifact.check(mutate(tmp_path, {"vendor/libcp311x.so": elf()}), adapter)
+    # Undeclared, the same kind of name still trips the foreign-tag scan; declared, its ELF is still checked.
+    assert code_of(artifact.check, mutate(tmp_path, {"vendor/libcp311y.so": elf()}), adapter) == "NATIVE_ABI"
+    assert code_of(artifact.check, mutate(tmp_path, {"vendor/libcp311x.so": elf(183)}), adapter) == "NATIVE_ELF"
+
+
+CALENDAR_ROOTS = "app-lib>=1\nboto3>=1.34\ncertifi>=2026\n"
+CALENDAR_ACCEPTED = {"app-lib": 1, "helper": 2, "boto3": 1, "botocore": 1, "s3transfer": 0, "certifi": 2026}
+
+
+def _calendar(repo, accepted, calendar=None):
+    adapter = _roots_only(repo, CALENDAR_ROOTS, accepted)
+    if calendar is not None:
+        path = repo / "lambda-validation.toml"
+        rows = "".join(f'{name} = "{reason}"\n' for name, reason in calendar.items())
+        path.write_text(path.read_text() + "[dependencies.calendar_versioned]\n" + rows)
+        adapter = Adapter(path)
+    return adapter
+
+
+def test_calendar_versioned_majors_are_checked_for_presence_only(tmp_path, repo):
+    members = dict(base_members(), **_dist_change("certifi", "2027.1.5"))
+    members["certifi/__init__.py"] = b""
+    rolled = write_zip(tmp_path / "rolled.zip", members)
+    # Without the exemption a new year's certifi is major drift with no repository change.
+    assert code_of(artifact.check, rolled, _calendar(repo, CALENDAR_ACCEPTED)) == "MAJOR_DRIFT"
+    adapter = _calendar(repo, CALENDAR_ACCEPTED, {"Certifi": "major is the release year"})
+    artifact.check(rolled, adapter)
+    # A moved major that is not exempt still fails beside it.
+    adapter = _calendar(repo, dict(CALENDAR_ACCEPTED, helper=3), {"certifi": "major is the release year"})
+    assert code_of(artifact.check, rolled, adapter) == "MAJOR_DRIFT"
+
+
+def test_calendar_versioned_presence_and_shape():
+    from nui_lambda_validation.metadata import check_majors
+
+    found = {"helper": {"version": "2.1.0"}}
+    with pytest.raises(ValidationError) as caught:
+        check_majors(found, {"helper": 2, "certifi": 2026}, {"certifi": "year"})
+    assert caught.value.code == "MAJOR_DRIFT" and "removed=['certifi']" in caught.value.detail
+    with pytest.raises(ValidationError) as caught:
+        check_majors(dict(found, certifi={"version": "2027.1.5"}), {"helper": 2}, {"certifi": "year"})
+    assert caught.value.code == "ADAPTER_CONFIG"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        '[dependencies.calendar_versioned]\ncertifi = "year"\n',
+        'accepted_majors = "majors.json"\n[dependencies.calendar_versioned]\ncertifi = " "\n',
+    ],
+)
+def test_calendar_versioned_needs_a_snapshot_and_a_reason(repo, extra):
+    (repo / "lambda-validation.toml").write_text(ADAPTER + extra)
+    assert code_of(Adapter, repo / "lambda-validation.toml") == "ADAPTER_CONFIG"

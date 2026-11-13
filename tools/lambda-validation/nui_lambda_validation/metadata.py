@@ -110,10 +110,14 @@ def zip_distributions(bundle):
     """Every top-level ``*.dist-info/METADATA``, keyed by normalized name; duplicates fail.
 
     A top-level ``*.egg-info`` is refused: the runtime's ``importlib.metadata`` would count it
-    as a distribution that these host checks never saw."""
+    as a distribution that these host checks never saw. So is a ``*.dist-info`` or
+    ``*.egg-info`` directory at any lower depth: nothing installs one there, and a second copy
+    of a distribution's metadata hidden below the top level would otherwise pass unseen."""
     found = {}
     for name in bundle.namelist():
         path = PurePosixPath(name)
+        if any(part.endswith((".dist-info", ".egg-info")) for part in path.parts[1:]):
+            fail("METADATA_INVALID", f"distribution metadata below the top level: {name}")
         if len(path.parts) >= 1 and path.parts[0].endswith(".egg-info"):
             fail("METADATA_INVALID", f"egg-info distributions are not supported: {path.parts[0]}")
         if len(path.parts) != 2 or path.name != "METADATA" or not path.parts[0].endswith(".dist-info"):
@@ -253,19 +257,29 @@ def test_only(names, production, joint, mapping):
     return {name: sorted(roots) for name, roots in sorted(mapping.items())}
 
 
-def check_majors(distributions, accepted):
+def check_majors(distributions, accepted, calendar_versioned=None):
     """Range requirements let a rebuild move a dependency major. ``accepted`` maps each
-    distribution of an accepted artifact to its major; the set and every major must hold."""
+    distribution of an accepted artifact to its major; the set and every major must hold.
+
+    ``calendar_versioned`` names distributions whose major is a year (certifi ``2026.x``), so
+    a new year's release moves it with nothing else changing. Each is still checked for
+    presence, never for its major, and must be in the snapshot."""
     if not isinstance(accepted, dict) or not all(
         isinstance(major, int) and not isinstance(major, bool) for major in accepted.values()
     ):
         fail("ADAPTER_CONFIG", "accepted_majors must map each distribution name to an integer major")
     actual = {name: Version(data["version"]).major for name, data in distributions.items()}
     expected = {canonicalize_name(name): major for name, major in accepted.items()}
-    if actual != expected:
-        added = sorted(set(actual) - set(expected))
-        removed = sorted(set(expected) - set(actual))
-        moved = sorted(
-            f"{n} {expected[n]}->{actual[n]}" for n in set(actual) & set(expected) if actual[n] != expected[n]
-        )
+    calendar = {canonicalize_name(name) for name in (calendar_versioned or {})}
+    stale = sorted(calendar - set(expected))
+    if stale:
+        fail("ADAPTER_CONFIG", f"calendar_versioned names distributions not in accepted_majors: {stale}")
+    added = sorted(set(actual) - set(expected))
+    removed = sorted(set(expected) - set(actual))
+    moved = sorted(
+        f"{n} {expected[n]}->{actual[n]}"
+        for n in set(actual) & set(expected)
+        if actual[n] != expected[n] and n not in calendar
+    )
+    if added or removed or moved:
         fail("MAJOR_DRIFT", f"added={added} removed={removed} moved={moved}")

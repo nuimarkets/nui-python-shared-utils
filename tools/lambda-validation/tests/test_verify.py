@@ -53,6 +53,7 @@ def project(tmp_path):
         "serverless.yml": "account: ACCOUNT\nrole: arn:ACCOUNT\n",
         "smoke.py": "print('committed smoke')\n",
         ".gitignore": "node_modules/\n",
+        "requirements-validation.txt": LINE.format(SHA),
     }
     for name, text in files.items():
         (root / name).write_text(text)
@@ -66,7 +67,7 @@ def project(tmp_path):
 
 @pytest.fixture
 def stubs(tmp_path, monkeypatch):
-    calls = {"package": [], "digests": [], "run": [], "fail": {}, "log": {}}
+    calls = {"package": [], "digests": [], "ensure": [], "run": [], "fail": {}, "log": {}}
     good = write_zip(tmp_path / "artifact.zip", base_members())
 
     def package(tree, stage, serverless, env, log):
@@ -84,6 +85,10 @@ def stubs(tmp_path, monkeypatch):
         (target / "app.zip").write_bytes(good.read_bytes())
         return target / "app.zip", target / "cloudformation-template-update-stack.json"
 
+    def ensure(image, machine):
+        calls["ensure"].append((image, machine, len(calls["digests"])))
+        return image
+
     def digests(image):
         calls["digests"].append(image)
         return [f"{image}@sha256:{'0' * 64}"]
@@ -96,7 +101,10 @@ def stubs(tmp_path, monkeypatch):
         return calls["fail"].get(index, 0)
 
     monkeypatch.setattr(build, "package", package)
+    monkeypatch.setattr(container, "ensure_image", ensure)
     monkeypatch.setattr(container, "image_digests", digests)
+    installed = json.dumps({"vcs_info": {"commit_id": SHA}})
+    monkeypatch.setattr(cli.importlib_metadata, "distribution", lambda name: FakeDistribution(installed))
     monkeypatch.setattr(container, "run", run)
     return calls
 
@@ -114,6 +122,12 @@ def test_verify_runs_every_stage_and_records_both_images(tmp_path, project, stub
         "example.invalid/build-python3.12:x86_64": [f"example.invalid/build-python3.12:x86_64@sha256:{'0' * 64}"]
     }
     assert manifest["image_digests"] and "negatives" in manifest["artifacts"][0]
+    # Both images are pulled when missing, for the target platform, before any digest is read.
+    assert stubs["ensure"] == [
+        ("example.invalid/lambda-python:3.12", "x86_64", 0),
+        ("example.invalid/build-python3.12:x86_64", "x86_64", 0),
+    ]
+    assert manifest["tool"] == {"commit": SHA}
     assert all(call["serverless_yml"].count("000000000000") == 2 for call in stubs["package"])
     assert all(call["config"] == "SYNTHETIC: value\n" for call in stubs["package"])
     assert stubs["package"][0]["serverless"] == project / "node_modules" / ".bin" / "serverless"
@@ -339,3 +353,46 @@ def test_self_check_needs_an_installed_distribution(tmp_path, monkeypatch):
     monkeypatch.setattr(cli.importlib_metadata, "distribution", missing)
     assert code_of(cli.self_check, path) == "SELF_CHECK"
     assert code_of(cli.self_check, tmp_path / "absent.txt") == "SELF_CHECK"
+
+
+def test_verify_binds_the_tool_to_the_committed_pin(tmp_path, project, stubs):
+    # The installed tool is SHA. The commit pins another; a working-copy edit back to SHA must not count.
+    (project / "requirements-validation.txt").write_text(LINE.format("f" * 40))
+    git(project, "commit", "-q", "-am", "pin another tool")
+    (project / "requirements-validation.txt").write_text(LINE.format(SHA))
+    with pytest.raises(ValidationError) as caught:
+        cli.verify(Adapter(project / "lambda-validation.toml"), tmp_path / "out")
+    assert caught.value.code == "SELF_CHECK" and "f" * 40 in caught.value.detail
+    assert stubs["package"] == [] and stubs["ensure"] == []
+    # No committed pin at all also fails, before anything is built.
+    git(project, "rm", "-q", "-f", "requirements-validation.txt")
+    git(project, "commit", "-q", "-m", "drop the pin")
+    (project / "requirements-validation.txt").write_text(LINE.format(SHA))
+    assert code_of(cli.verify, Adapter(project / "lambda-validation.toml"), tmp_path / "out2") == "SELF_CHECK"
+    assert stubs["package"] == []
+
+
+@pytest.mark.parametrize("machine, platform", [("x86_64", "linux/amd64"), ("aarch64", "linux/arm64")])
+def test_ensure_image_pulls_only_when_missing(monkeypatch, machine, platform):
+    commands = []
+
+    def docker(present, pulls):
+        def run(command, **kwargs):
+            commands.append(command)
+            if command[1:3] == ["image", "inspect"]:
+                return subprocess.CompletedProcess(command, 0 if present else 1, stdout="", stderr="No such image")
+            return subprocess.CompletedProcess(command, 0 if pulls else 1, stdout="", stderr="denied: pull access")
+
+        return run
+
+    monkeypatch.setattr(container.subprocess, "run", docker(present=True, pulls=False))
+    assert container.ensure_image("img:1", machine) == "img:1"
+    assert commands == [["docker", "image", "inspect", "img:1"]]
+    commands.clear()
+    monkeypatch.setattr(container.subprocess, "run", docker(present=False, pulls=True))
+    container.ensure_image("img:1", machine)
+    assert commands[1] == ["docker", "pull", "--platform", platform, "img:1"]
+    monkeypatch.setattr(container.subprocess, "run", docker(present=False, pulls=False))
+    with pytest.raises(ValidationError) as caught:
+        container.ensure_image("img:1", machine)
+    assert caught.value.code == "BUILD" and "denied: pull access" in caught.value.detail

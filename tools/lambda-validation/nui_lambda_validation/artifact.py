@@ -34,7 +34,7 @@ def check(archive, adapter: Adapter):
                 accepted = json.loads(path.read_text())
             except (OSError, ValueError) as error:
                 fail("ADAPTER_CONFIG", f"{path}: {error}")
-            check_majors(distributions, accepted)
+            check_majors(distributions, accepted, deps.get("calendar_versioned"))
         if deps.get("test_lock"):
             joint = read_pins(adapter.file(deps["test_lock"]))
             report["test_only_exclusions"] = test_only(

@@ -75,10 +75,6 @@ def project(tmp_path, monkeypatch):
             @pytest.mark.skip(reason="allowed")
             def test_allowed():
                 pass
-
-            @pytest.mark.xfail(reason="expected")
-            def test_xfail():
-                raise AssertionError
             """
         )
     )
@@ -209,3 +205,75 @@ EXPECTED_BASE_ENV = {
 
 def test_base_env_is_the_isolation_contract():
     assert offline.BASE_ENV == EXPECTED_BASE_ENV
+
+
+XFAILS = """
+import pytest
+
+@pytest.mark.xfail(reason="expected")
+def test_xfail():
+    raise AssertionError
+
+@pytest.mark.xfail(reason="flaky")
+def test_xpass():
+    pass
+"""
+
+
+@pytest.mark.parametrize("node", ["test_xfail", "test_xpass"])
+def test_xfail_and_xpass_count_as_skips(project, capfd, node):
+    # A JUnit skip count includes an xfail, and marking a failing test xfail must not turn the run green.
+    (project / "tests" / "test_xfails.py").write_text(XFAILS)
+    args = ["-q", "-p", "no:cacheprovider", f"tests/test_xfails.py::{node}"]
+    declared = {name: "unused" for name in installed_plugins()}
+    assert offline.run(sys.executable, project, args, not_loaded=declared) == 1
+    assert f"unexpected=['tests/test_xfails.py::{node}']" in capfd.readouterr().out
+    allowed = [f"tests/test_xfails.py::{node}"]
+    assert offline.run(sys.executable, project, args, allowed_skips=allowed, not_loaded=declared) == 0
+
+
+BOOTSTRAP_PROBE = """
+import importlib.util, socket, sys
+spec = importlib.util.spec_from_file_location("bootstrap", sys.argv[1])
+bootstrap = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bootstrap)
+seen = []
+
+def record(*args, **kwargs):
+    # Each probe must carry a timeout, or a guard that did not install hangs the run.
+    if args and isinstance(args[0], socket.socket):
+        seen.append(args[0].gettimeout())
+    else:
+        seen.append(kwargs.get("timeout"))
+    raise {error}
+
+bootstrap.blocked = record
+try:
+    bootstrap.guard()
+finally:
+    print("TIMEOUTS", seen)
+"""
+
+
+@pytest.mark.parametrize(
+    "error, status",
+    [
+        ("bootstrap.OfflineBlocked('blocked')", 0),
+        ("OSError('network unreachable')", 3),
+        ("RuntimeError('some other error')", 3),
+    ],
+)
+def test_guard_probe_accepts_only_its_own_refusal(tmp_path, error, status):
+    import subprocess
+
+    script = tmp_path / "probe.py"
+    script.write_text(BOOTSTRAP_PROBE.format(error=error))
+    result = subprocess.run(
+        [sys.executable, "-I", "-B", str(script), str(offline.BOOTSTRAP)], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == status, result.stderr
+    if status:
+        assert "OFFLINE_GUARD: network guard ineffective" in result.stderr
+        assert "Traceback" not in result.stderr
+    else:
+        assert "TIMEOUTS [2.0, 2.0, 2.0, 2.0]" in result.stdout

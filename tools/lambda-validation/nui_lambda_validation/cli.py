@@ -19,6 +19,9 @@ from .zipcheck import open_zip
 _PIN = re.compile(r"^nui-lambda-validation @ git\+https://[^@\s]+@([0-9a-f]{40})#subdirectory=tools/lambda-validation$")
 
 
+REQUIREMENT = "requirements-validation.txt"
+
+
 def self_check(requirement):
     """The installed tool must come from exactly the commit the requirement file pins."""
     try:
@@ -65,6 +68,9 @@ def verify(adapter, output, stages=None, keep_extracted=False):
     if not committed_path.is_file():
         fail("BUILD", f"{adapter.path.name} is not committed at {manifest['head']}")
     checkout, adapter = adapter, Adapter(committed_path)
+    # The tool that checks this commit must be the one this commit pins, read from the same
+    # committed tree, so a working-copy pin edit cannot stand in for the committed one.
+    manifest["tool"] = self_check(tree / REQUIREMENT)
     spec = adapter.require("build", ("stages", "config_path", "config_text"))
     box = adapter.require("container", ("image", "smoke"))
     if not spec["stages"]:
@@ -82,6 +88,9 @@ def verify(adapter, output, stages=None, keep_extracted=False):
     if deps["mode"] == "exact":
         (proof / "pins.json").write_text(json.dumps(read_pins(adapter.file(deps["pins"])), indent=2) + "\n")
     image = box["image"]
+    machine = adapter.target["machine"]
+    for name in [image, *spec.get("build_images", [])]:
+        container.ensure_image(name, machine)
     manifest.update(
         image=image,
         image_digests=container.image_digests(image),
@@ -107,7 +116,6 @@ def verify(adapter, output, stages=None, keep_extracted=False):
             json.dumps({n: {"version": d["version"], "requires": d["requires"]} for n, d in dists.items()}, indent=2)
             + "\n"
         )
-        machine = adapter.target["machine"]
         smoke_env = dict(box.get("env", {}), VALIDATION_STAGE=stage)
         script = adapter.file(box["smoke"])
         major, minor = adapter.target["python"].split(".")

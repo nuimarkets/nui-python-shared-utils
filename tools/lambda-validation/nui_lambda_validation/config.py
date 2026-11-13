@@ -34,6 +34,7 @@ SCHEMA = {
             "part_prefixes": STRS,
             "suffixes": STRS,
             "root_suffixes": STRS,
+            "top_level": STRS,
         },
     },
     "native": {"extensions": INT, "require": STRS, "plain_libraries": STRS, "require_any": BOOL},
@@ -42,6 +43,7 @@ SCHEMA = {
         "pins": STR,
         "roots": STR,
         "accepted_majors": STR,
+        "calendar_versioned": STR_MAP,
         "test_lock": STR,
         "test_only": STRS_MAP,
     },
@@ -138,6 +140,15 @@ class Adapter:
             fail("ADAPTER_CONFIG", "[dependencies] needs roots")
         if ("test_only" in deps) != ("test_lock" in deps):
             fail("ADAPTER_CONFIG", "[dependencies] test_only and test_lock go together, or the leak check never runs")
+        calendar = deps.get("calendar_versioned", {})
+        if calendar and "accepted_majors" not in deps:
+            fail("ADAPTER_CONFIG", "[dependencies] calendar_versioned only qualifies accepted_majors")
+        blank = sorted(name for name, reason in calendar.items() if not reason.strip())
+        if blank:
+            fail("ADAPTER_CONFIG", f"[dependencies.calendar_versioned] needs a reason for {blank}")
+        names = self.get("zip").get("forbidden", {}).get("top_level", [])
+        if any(not name or "/" in name or name in (".", "..") for name in names):
+            fail("ADAPTER_CONFIG", f"[zip.forbidden] top_level takes bare path components, got {names}")
         limit = self.get("zip").get("uncompressed_limit", LAMBDA_UNZIPPED_LIMIT)
         if not 0 < limit <= LAMBDA_UNZIPPED_LIMIT:
             fail(

@@ -1,13 +1,14 @@
 """Standard negative controls: mutate an actual ZIP and require the check to reject it for the intended reason."""
 
 import json
+import re
 import zipfile
 from pathlib import Path
 
 from . import artifact
 from .errors import ValidationError, fail
 from .native import ELF_MACHINE
-from .zipcheck import TOOL_PACKAGE
+from .zipcheck import SECRET_FILE_PATTERN, TOOL_PACKAGE, open_zip, read_member
 
 
 def _elf(machine_code):
@@ -89,6 +90,9 @@ def plans(adapter, names):
         "part_prefixes": lambda v: f"probe/{v}probe/x.txt",
         "suffixes": lambda v: f"probe/x{v}",
         "root_suffixes": lambda v: f"probe{v}",
+        # The bare top-level file is what this rule adds over a slash prefix. A name the
+        # secret rule would reject first is probed as a directory child instead.
+        "top_level": lambda v: f"{v}/x.txt" if re.search(SECRET_FILE_PATTERN, v) else v,
     }
     for kind, make in probes.items():
         for value in forbidden.get(kind, ()):
@@ -112,10 +116,10 @@ def plans(adapter, names):
 
 
 def _copy(source, target, add=(), drop=lambda name: False):
-    with zipfile.ZipFile(source) as original, zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as mutant:
+    with open_zip(source) as original, zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as mutant:
         for info in original.infolist():
             if not drop(info.filename):
-                mutant.writestr(info, original.read(info))
+                mutant.writestr(info, read_member(original, info))
         for member, data in add:
             info = zipfile.ZipInfo(member)
             info.filename = member  # keep `..` and duplicates verbatim
@@ -123,16 +127,16 @@ def _copy(source, target, add=(), drop=lambda name: False):
 
 
 def _substitute(source, target, metadata_path):
-    with zipfile.ZipFile(source) as original:
-        text = original.read(metadata_path).decode()
+    with open_zip(source) as original:
+        text = read_member(original, metadata_path).decode()
     version = next(line.split(": ", 1)[1] for line in text.splitlines() if line.startswith("Version: "))
     head, patch = version.rsplit(".", 1)
     new = f"{head}.{int(patch) + 1}"
     package = metadata_path.split("-", 1)[0]
     changed = 0
-    with zipfile.ZipFile(source) as original, zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as mutant:
+    with open_zip(source) as original, zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as mutant:
         for info in original.infolist():
-            data = original.read(info)
+            data = read_member(original, info)
             before = data
             if info.filename == metadata_path:
                 data = data.replace(f"Version: {version}".encode(), f"Version: {new}".encode(), 1)
@@ -150,9 +154,9 @@ def run(archive, adapter, output):
     """Run every applicable mutant; fail unless each is rejected with its intended code."""
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
-    with zipfile.ZipFile(archive) as bundle:
-        names = bundle.namelist()
     artifact.check(archive, adapter)  # the unmutated artifact must pass first
+    with open_zip(archive) as bundle:
+        names = bundle.namelist()
     results = {}
     for index, (name, (expected, mutate)) in enumerate(sorted(plans(adapter, names).items())):
         mutant = output / f"negative-{index:02d}.zip"

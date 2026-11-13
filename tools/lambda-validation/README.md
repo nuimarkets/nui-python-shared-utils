@@ -31,6 +31,10 @@ Add `.venv-validation/` to `.gitignore` and keep `lambda-validation.toml`,
 `check-zip`, `negatives` and `verify` fail a ZIP that carries any of them, at any depth
 (`TOOL_IN_ARTIFACT`).
 
+`verify` runs the same check against the committed `requirements-validation.txt` (from
+`git archive HEAD`, at the repository's top level) before it builds anything, and fails
+`SELF_CHECK` when the running tool is not the commit pinned there.
+
 ## Commands
 
 Every failure exits 1 and prints `CODE: detail` on stderr, except `offline-pytest`, which
@@ -41,8 +45,8 @@ in-container check's own code in its detail.
 
 | Command | What it does |
 | --- | --- |
-| `verify --config lambda-validation.toml --output DIR` | Builds every stage from `git archive HEAD` with synthetic configuration, then per stage: secret scan, `check-zip`, extraction proof, a check that the image runs the `[target]` Python, the adapter's smoke script in the Lambda image, and `pip check` in the image over the artifact itself (`/var/task` on `PYTHONPATH`, since `python -m pip` drops the working directory from `sys.path`); the first stage also runs `negatives`. Each stage's package is written to `.serverless-validation-<stage>/` inside the build tree, so the repository's package patterns must exclude `.serverless-*/**`. `[container.env]` may not set a variable the container command sets itself. The adapter, its lock files and its smoke script are read from the committed tree, never the working copy, and the adapter must sit at the repository's top level. Records the digests of the runtime image and of every `build_images` entry. Copies each compiled template out for the repository's own assertions. `DIR` must be new and outside the checkout |
-| `check-zip ZIP --config ...` | Member safety, secrets, exclusions, required paths, size, native ABI/ELF, dependency pins and closure, test-only leaks, optional major drift |
+| `verify --config lambda-validation.toml --output DIR` | Fails `SELF_CHECK` unless the running tool is the commit the committed `requirements-validation.txt` pins. Pulls the runtime image and every `build_images` entry that is not on the host (`--platform` from `[target] machine`; a failed pull is `BUILD`), so a consumer needs no pull step of its own. Builds every stage from `git archive HEAD` with synthetic configuration, then per stage: secret scan, `check-zip`, extraction proof, a check that the image runs the `[target]` Python, the adapter's smoke script in the Lambda image, and `pip check` in the image over the artifact itself (`/var/task` on `PYTHONPATH`, since `python -m pip` drops the working directory from `sys.path`); the first stage also runs `negatives`. Each stage's package is written to `.serverless-validation-<stage>/` inside the build tree, so the repository's package patterns must exclude `.serverless-*/**`. `[container.env]` may not set a variable the container command sets itself. The adapter, its lock files and its smoke script are read from the committed tree, never the working copy, and the adapter must sit at the repository's top level. Records the digests of the runtime image and of every `build_images` entry. Copies each compiled template out for the repository's own assertions. `DIR` must be new and outside the checkout |
+| `check-zip ZIP --config ...` | Member safety, secrets, exclusions, required paths, size, native ABI/ELF, dependency pins and closure, test-only leaks, optional major drift. Distribution metadata is read from top-level `*.dist-info/METADATA` only, and a `*.dist-info` or `*.egg-info` directory at any lower depth fails `METADATA_INVALID` |
 | `negatives ZIP --config ... --output DIR` | Mutates the ZIP once per standard defect and once per configured exclusion rule; fails unless each mutant is rejected with its intended code. A standard mutant the artifact cannot support (no SDK path in `[zip] required`, no `botocore` metadata) must be declared in `[negatives.not_applicable]` with a reason, and the reasons are written beside the results |
 | `extract ZIP DIR` | Extracts and proves the files on disk are exactly the members, byte for byte |
 | `offline-pytest --config ... --python APP_PYTHON [-- ARGS]` | Runs the application's suite in its own interpreter under the offline policy below |
@@ -69,6 +73,8 @@ parts = ["fixtures"]              # an exact path component at any depth
 part_prefixes = [".env", "env-"]  # a component starting with the value
 suffixes = [".tsv"]               # whole-path endings
 root_suffixes = [".md"]           # endings of top-level files only
+top_level = ["scripts", "venv"]   # first path component equals the value: a bare top-level
+                                  # file `scripts` as well as anything under `scripts/`
 
 [native]
 extensions = 10                   # optional exact count of CPython extension modules
@@ -81,6 +87,8 @@ mode = "exact"                    # or "roots-only" for range requirements
 pins = "requirements.txt"         # exact mode: one == per distribution, no markers
 roots = "requirements.in"         # the direct requirements the closure starts from
 # accepted_majors = "lambda-validation-majors.json"  # roots-only: fail if a major moves
+# [dependencies.calendar_versioned]  # in accepted_majors, but the major is a year: presence only
+# certifi = "major is the release year"
 # test_lock = "requirements-test.txt"
 # [dependencies.test_only]        # test-only distribution -> top-level names it installs
 # pytest = ["pytest", "_pytest", "py.py"]
@@ -91,7 +99,7 @@ roots = "requirements.in"         # the direct requirements the closure starts f
 [offline]
 plugins = ["pytest_mock", "pytest_cov"]   # autoload is off; list every plugin the suite uses
 args = ["tests"]
-allowed_skips = []                         # exact node ids; any other skip fails the run
+allowed_skips = []                         # exact node ids; any other skip, xfail or xpass fails the run
 passthrough_env = []
 [offline.not_loaded]                       # installed pytest11 plugins deliberately not loaded
 # anyio = "suite has no async tests"
@@ -99,7 +107,7 @@ passthrough_env = []
 
 [build]
 stages = ["dev", "training", "prod"]
-build_images = ["public.ecr.aws/sam/build-python3.12:latest-x86_64"]  # digests recorded; must be local
+build_images = ["public.ecr.aws/sam/build-python3.12:latest-x86_64"]  # pulled if missing; digests recorded
 config_path = "config/env-{stage}.yml"
 # serverless = "node_modules/.bin/serverless"   # default, resolved in the checkout
 config_text = """SYNTHETIC: value
@@ -148,7 +156,10 @@ The runner clears the environment (keeping only `PATH`, a temporary `HOME`, null
 config files, the adapter's `passthrough_env` and `[offline.env]`, neither of which may name
 a variable the runner sets itself), disables plugin autoload, and replaces every
 `socket.socket` connect, connect_ex, sendto and sendmsg in the test interpreter, loopback and
-Unix sockets included, proving the guard with probes before tests start. Name resolution is
+Unix sockets included, proving the guard with probes before tests start (each probe has a
+timeout, and any outcome but the guard's own refusal stops the run with exit 3). An xfailed
+test and a non-strict xpass count as skips: each fails the run unless its exact node id is in
+`allowed_skips`. Name resolution is
 not blocked. It runs the application's interpreter, which must be Python 3.11 or newer, with
 `-P` so this package is not on the application's path; install this tool in its own
 environment, as above, or the suite can still import it. It is not an OS-level sandbox: a

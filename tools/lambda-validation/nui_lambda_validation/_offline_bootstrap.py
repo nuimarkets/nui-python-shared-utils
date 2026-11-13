@@ -12,8 +12,22 @@ import socket
 import sys
 
 
+class OfflineBlocked(RuntimeError):
+    """Raised by the guard. A RuntimeError, so suites that expect one keep working, but its own
+    class, so a probe can tell the guard's refusal from any other error."""
+
+
 def blocked(*args, **kwargs):
-    raise RuntimeError("offline test: outbound networking blocked")
+    raise OfflineBlocked("offline test: outbound networking blocked")
+
+
+PROBE_TIMEOUT = 2.0
+
+
+def _sock(kind):
+    sock = socket.socket(socket.AF_INET, kind)
+    sock.settimeout(PROBE_TIMEOUT)
+    return sock
 
 
 def guard():
@@ -22,16 +36,21 @@ def guard():
     socket.socket.sendto = blocked
     socket.socket.sendmsg = blocked
     socket.create_connection = blocked
+    # Each probe carries a timeout, so a guard that did not install fails here rather than
+    # hanging on an unroutable address; any outcome but the guard's own refusal stops the run.
     for probe in (
-        lambda: socket.create_connection(("192.0.2.1", 443)),
-        lambda: socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("192.0.2.1", 443)),
-        lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(b"probe", ("192.0.2.1", 9)),
-        lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendmsg([b"probe"], [], 0, ("192.0.2.1", 9)),
+        lambda: socket.create_connection(("192.0.2.1", 443), timeout=PROBE_TIMEOUT),
+        lambda: _sock(socket.SOCK_STREAM).connect(("192.0.2.1", 443)),
+        lambda: _sock(socket.SOCK_DGRAM).sendto(b"probe", ("192.0.2.1", 9)),
+        lambda: _sock(socket.SOCK_DGRAM).sendmsg([b"probe"], [], 0, ("192.0.2.1", 9)),
     ):
         try:
             probe()
-        except RuntimeError:
+        except OfflineBlocked:
             continue
+        except Exception as error:
+            print(f"OFFLINE_GUARD: network guard ineffective: {type(error).__name__}: {error}", file=sys.stderr)
+            raise SystemExit(3) from None
         print("OFFLINE_GUARD: network guard ineffective", file=sys.stderr)
         raise SystemExit(3)
 
@@ -82,8 +101,10 @@ def main():
             self.allowed_seen = []
 
         def pytest_runtest_logreport(self, report):
-            # An xfail reports as skipped with ``wasxfail``; it is not a skip.
-            if report.skipped and not hasattr(report, "wasxfail"):
+            # An xfail reports as skipped with ``wasxfail`` and a non-strict xpass as passed
+            # with it. Neither proves the test passes, so both count as skips: a JUnit check
+            # counts an xfail as skipped, and marking a failing test xfail must not turn CI green.
+            if report.skipped or (report.passed and hasattr(report, "wasxfail")):
                 (self.allowed_seen if report.nodeid in allowed else self.unexpected).append(report.nodeid)
 
         def pytest_collectreport(self, report):
@@ -99,7 +120,9 @@ def main():
                 f"SKIP_POLICY allowed={sorted(self.allowed_seen)} unexpected={sorted(self.unexpected)}"
             )
             if self.unexpected:
-                terminalreporter.write_line("UNEXPECTED_SKIP: run fails on skips outside the adapter allow-list")
+                terminalreporter.write_line(
+                    "UNEXPECTED_SKIP: run fails on skips, xfails and xpasses outside the adapter allow-list"
+                )
 
     arguments = []
     for plugin in policy["plugins"]:

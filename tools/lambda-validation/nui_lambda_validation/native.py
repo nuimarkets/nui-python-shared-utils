@@ -45,7 +45,10 @@ def inspect(bundle, python, machine, rules):
     declared = set(rules.get("plain_libraries", ()))
     extensions, libraries = [], []
     for name in names:
-        for match in _FOREIGN.finditer(PurePosixPath(name).name):
+        # A declared plain library is named exactly by the adapter, so a `cp<digits>` run in
+        # its file name (`libcp312x.so`) is not read as a Python tag. Its ELF is still checked.
+        scanned = "" if name in declared else PurePosixPath(name).name
+        for match in _FOREIGN.finditer(scanned):
             if match.group(1) != tag:
                 fail("NATIVE_ABI", f"foreign Python ABI {match.group(0)}: {name}")
         if classify(name) == "extension":

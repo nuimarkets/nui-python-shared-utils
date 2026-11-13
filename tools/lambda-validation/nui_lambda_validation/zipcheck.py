@@ -3,6 +3,7 @@
 import hashlib
 import re
 import zipfile
+import zlib
 from pathlib import Path, PurePosixPath
 
 from .errors import fail
@@ -28,8 +29,9 @@ def open_zip(archive):
 
 
 def member_safety(names):
-    """Unique, relative, no traversal, and no file that is also a parent directory of
-    another member (it could not be extracted as both). Applies to every artifact."""
+    """Unique, relative, no traversal, and no file that is also a directory: a parent of
+    another member or an explicit ``name/`` entry (it could not be extracted as both).
+    Applies to every artifact."""
     seen = set()
     parents = set()
     for name in names:
@@ -40,6 +42,8 @@ def member_safety(names):
         if path.is_absolute() or ".." in path.parts or "\\" in name:
             fail("UNSAFE_MEMBER", name)
         parents.update(parent.as_posix() for parent in path.parents if parent.as_posix() != ".")
+        if name.endswith("/"):
+            parents.add(name.rstrip("/"))
     collisions = sorted(name for name in seen if not name.endswith("/") and name in parents)
     if collisions:
         fail("UNSAFE_MEMBER", f"file is also a directory of other members: {collisions[:10]}")
@@ -57,7 +61,7 @@ def read_member(bundle, member):
     """Read one member; a corrupt or unsupported member fails as UNREADABLE_ZIP."""
     try:
         return bundle.read(member)
-    except (OSError, zipfile.BadZipFile, NotImplementedError, RuntimeError) as error:
+    except (OSError, zipfile.BadZipFile, NotImplementedError, RuntimeError, zlib.error) as error:
         name = getattr(member, "filename", member)
         fail("UNREADABLE_ZIP", f"{name}: {error}")
 
@@ -71,9 +75,12 @@ def secret_files(names):
 def _forbidden(name, rules):
     """``prefixes``: whole-path string prefixes. ``parts``: any exact path component.
     ``part_prefixes``: any component starting with one. ``suffixes``: whole-path endings.
-    ``root_suffixes``: endings of a top-level file only."""
+    ``root_suffixes``: endings of a top-level file only. ``top_level``: the first path
+    component equals the value exactly, so a bare top-level file of that name is caught too."""
     path = PurePosixPath(name)
     parts = path.parts
+    if parts and parts[0] in rules.get("top_level", ()):
+        return "top level"
     if any(name.startswith(prefix) for prefix in rules.get("prefixes", ())):
         return "prefix"
     if any(part in rules.get("parts", ()) for part in parts):

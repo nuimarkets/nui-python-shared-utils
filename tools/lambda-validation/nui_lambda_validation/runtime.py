@@ -64,28 +64,44 @@ def _normalize(name):
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
+class NetworkBlocked(RuntimeError):
+    """The guard's own refusal, so a probe can tell it from any other error."""
+
+
+def _blocked(*args, **kwargs):
+    raise NetworkBlocked("offline check: outbound networking blocked")
+
+
+PROBE_TIMEOUT = 2.0
+
+
+def _probe_socket(kind):
+    made = socket.socket(socket.AF_INET, kind)
+    made.settimeout(PROBE_TIMEOUT)
+    return made
+
+
 def install_network_guard():
     """Refuse outbound TCP and UDP from this interpreter, and prove it with probes."""
-
-    def blocked(*args, **kwargs):
-        raise RuntimeError("offline check: outbound networking blocked")
-
-    socket.socket.connect = blocked
-    socket.socket.connect_ex = blocked
-    socket.socket.sendto = blocked
-    socket.socket.sendmsg = blocked
-    socket.create_connection = blocked
+    socket.socket.connect = _blocked
+    socket.socket.connect_ex = _blocked
+    socket.socket.sendto = _blocked
+    socket.socket.sendmsg = _blocked
+    socket.create_connection = _blocked
+    # Timeouts so an uninstalled guard fails rather than hangs; only the guard's own refusal passes.
     probes = (
-        lambda: socket.create_connection(("192.0.2.1", 443)),
-        lambda: socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("192.0.2.1", 443)),
-        lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(b"probe", ("192.0.2.1", 9)),
-        lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendmsg([b"probe"], [], 0, ("192.0.2.1", 9)),
+        lambda: socket.create_connection(("192.0.2.1", 443), timeout=PROBE_TIMEOUT),
+        lambda: _probe_socket(socket.SOCK_STREAM).connect(("192.0.2.1", 443)),
+        lambda: _probe_socket(socket.SOCK_DGRAM).sendto(b"probe", ("192.0.2.1", 9)),
+        lambda: _probe_socket(socket.SOCK_DGRAM).sendmsg([b"probe"], [], 0, ("192.0.2.1", 9)),
     )
     for probe in probes:
         try:
             probe()
-        except RuntimeError:
+        except NetworkBlocked:
             continue
+        except Exception as error:
+            _fail("OFFLINE_GUARD", f"network guard ineffective: {type(error).__name__}: {error}")
         _fail("OFFLINE_GUARD", "network guard ineffective")
     return "NETWORK_GUARD_EFFECTIVE"
 

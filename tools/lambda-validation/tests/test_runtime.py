@@ -103,6 +103,39 @@ def test_network_guard_and_conftest(tmp_path):
     assert "CODE OFFLINE_GUARD" in run_host(root, "sys.modules['conftest'] = object(); runtime.assert_no_conftest()")
 
 
+@pytest.mark.parametrize(
+    "error, expected",
+    [
+        ("runtime.NetworkBlocked('blocked')", "NETWORK_GUARD_EFFECTIVE TIMEOUTS [2.0, 2.0, 2.0, 2.0]"),
+        ("OSError('network unreachable')", "CODE OFFLINE_GUARD"),
+        ("RuntimeError('some other error')", "CODE OFFLINE_GUARD"),
+    ],
+)
+def test_network_guard_probe_accepts_only_its_own_refusal(tmp_path, error, expected):
+    script = textwrap.dedent(
+        f"""
+        import socket, sys
+        sys.path.insert(0, {str(PACKAGE.parent)!r})
+        from nui_lambda_validation import runtime
+        seen = []
+        def record(*args, **kwargs):
+            if args and isinstance(args[0], socket.socket):
+                seen.append(args[0].gettimeout())
+            else:
+                seen.append(kwargs.get("timeout"))
+            raise {error}
+        runtime._blocked = record
+        try:
+            print(runtime.install_network_guard(), "TIMEOUTS", seen)
+        except runtime.RuntimeCheckError as caught:
+            print("CODE", caught.code, caught)
+        """
+    )
+    result = subprocess.run([sys.executable, "-I", "-B", "-c", script], capture_output=True, text=True, timeout=60)
+    out = result.stdout + result.stderr
+    assert expected in out and "Traceback" not in out
+
+
 def test_tool_isolation(tmp_path):
     root = fake_root(tmp_path / "task")
     body = "runtime.assert_tool_isolated(root=Path(runtime.__file__).resolve().parent.parent)"
