@@ -186,9 +186,10 @@ workflow runs it on Python 3.11 to 3.14 and requires zero skips.
 `verify` runs `self-check` first, so it needs the tool installed from a commit, never from a
 working copy (an editable or directory install records no commit). To try an unpushed
 change against a consumer, commit it, install it into the consumer's validation venv with
-`pip install "git+file:///path/to/nui-python-shared-utils@<sha>#subdirectory=tools/lambda-validation"`,
-and commit that sha in the consumer's `requirements-validation.txt` line, which keeps its
-`git+https://` URL: only the commit is compared.
+`pip install --force-reinstall --no-deps "git+file:///path/to/nui-python-shared-utils@<sha>#subdirectory=tools/lambda-validation"`
+(pip keeps an installed copy of the same version otherwise), commit that sha in the
+consumer's `requirements-validation.txt` line, which keeps its `git+https://` URL since only
+the commit is compared, and run `self-check` before `verify`.
 
 ```bash
 python -m venv .venv

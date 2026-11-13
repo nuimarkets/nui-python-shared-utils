@@ -848,6 +848,17 @@ def test_a_marker_on_a_host_only_field_is_refused(tmp_path, repo, field):
     assert code_of(artifact.check, write_zip(tmp_path / "r.zip", base_members()), adapter) == "MARKER_UNSUPPORTED"
 
 
+def test_a_host_only_field_named_inside_a_quoted_value_is_data(tmp_path, repo):
+    adapter = _roots_only(repo, "app-lib>=1\nboto3>=1.34\n")
+    members = base_members()
+    marker = "x>=1; os_name in 'posix,platform_release' and implementation_name != \"platform_version\""
+    members["app_lib-1.0.0.dist-info/METADATA"] = metadata("app-lib", "1.0.0", ["helper>=2,<3", marker])
+    with pytest.raises(ValidationError) as caught:
+        artifact.check(write_zip(tmp_path / "m.zip", members), adapter)
+    # Evaluated, not refused: the marker is true here, so the absent x is what fails.
+    assert caught.value.code == "CLOSURE_MISSING" and caught.value.detail == "x"
+
+
 def test_extract_refuses_a_directory_entry_beside_a_file(tmp_path):
     members = dict(base_members(), **{"pkg": b"", "pkg/": b""})
     assert code_of(extract, write_zip(tmp_path / "clash.zip", members), tmp_path / "out") == "UNSAFE_MEMBER"

@@ -177,12 +177,14 @@ def target_environment(python_full_version, machine):
 
 # Marker fields whose value is the build host's, which no target description can supply.
 HOST_ONLY_MARKER = re.compile(r"\bplatform_(?:release|version)\b")
+# Quoted marker values: a field name inside one (`os_name in "posix,platform_release"`) is data.
+_QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
 
 
 def _evaluate(marker, environment, where):
     """Evaluate ``marker`` for the target. One naming a host-only field would be decided by the
     machine running the check, not the Lambda runtime, so it is refused rather than guessed."""
-    if HOST_ONLY_MARKER.search(str(marker)):
+    if HOST_ONLY_MARKER.search(_QUOTED.sub("", str(marker))):
         fail("MARKER_UNSUPPORTED", f"{where}: marker `{marker}` depends on the build host, not the target")
     return marker.evaluate(environment)
 
