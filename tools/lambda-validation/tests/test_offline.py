@@ -630,3 +630,29 @@ def test_completion_includes_items_added_after_collection(tmp_path):
     with pytest.raises(ValidationError) as caught:
         offline.run(sys.executable, root, args, not_loaded=declared)
     assert caught.value.code == "OFFLINE_GUARD" and "'complete': False" in caught.value.detail
+
+
+# Appends items, then removes them again before the runner's own sessionfinish reads the list.
+GROW_THEN_SHRINK_CONFTEST = (
+    GROW_CONFTEST
+    + """
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_sessionfinish(session):
+    session.items[:] = [item for item in session.items if item.name == "test_a_passes"]
+"""
+)
+
+
+def test_completion_keeps_an_appended_item_that_started_after_it_is_removed(tmp_path):
+    from nui_lambda_validation.errors import ValidationError
+
+    root = tmp_path / "grow-shrink"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "conftest.py").write_text(GROW_THEN_SHRINK_CONFTEST)
+    (root / "tests" / "test_grow.py").write_text("def test_a_passes():\n    pass\n")
+    declared = {name: "unused" for name in installed_plugins()}
+    args = ["-q", "-p", "no:cacheprovider", "tests"]
+    with pytest.raises(ValidationError) as caught:
+        offline.run(sys.executable, root, args, not_loaded=declared)
+    assert caught.value.code == "OFFLINE_GUARD" and "'complete': False" in caught.value.detail

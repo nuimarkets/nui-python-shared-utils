@@ -148,14 +148,20 @@ def main():
             self.ran = 0
             self.finished = set()
             self.phases = {}
-            self.collected = None
+            self.collected = False
+            # Every item that has to finish, by id, held so no id is reused. It only grows:
+            # the items collection left, each item whose protocol started, and session.items
+            # at the end, so no hook that shrinks session.items shrinks what has to finish.
+            self.required = {}
             self.complete = False
 
+        def require(self, items):
+            for item in items:
+                self.required.setdefault(id(item), item)
+
         def pytest_collection_finish(self, session):
-            # The items as collection left them, held so no id is reused: a hook that later
-            # shrinks session.items must not shrink what has to finish, and items a hook adds
-            # are read from session.items at the end as well.
-            self.collected = list(session.items)
+            self.collected = True
+            self.require(session.items)
 
         @pytest.hookimpl(hookwrapper=True)
         def pytest_runtest_protocol(self, item, nextitem):
@@ -166,6 +172,7 @@ def main():
             # the one way pytest skips the call). A protocol raising (pytest.exit) never
             # finished, and an override that returns True without running the item, runs
             # another item, or runs setup and teardown alone, reports no such pair for it.
+            self.require([item])
             self.phases.pop(id(item), None)
             outcome = yield
             try:
@@ -202,8 +209,8 @@ def main():
         def pytest_sessionfinish(self, session, exitstatus):
             # pytest.exit(returncode=0) in a test or fixture ends the loop with a 0 and the rest
             # unrun: a pass needs every collected item to have finished.
-            required = (self.collected or []) + list(getattr(session, "items", ()))
-            self.complete = self.collected is not None and all(id(item) in self.finished for item in required)
+            self.require(getattr(session, "items", ()))
+            self.complete = self.collected and all(key in self.finished for key in self.required)
             if self.unexpected:
                 session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
