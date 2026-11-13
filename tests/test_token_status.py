@@ -941,6 +941,17 @@ class TestLogging:
         assert result.status is TokenStatus.ACTIVE
         assert issuer.bearer(1) == "Bearer first"
 
+    def test_refresh_warning_never_carries_the_token(self, issuer, clock, caplog):
+        # The one log line with a live machine token in scope.
+        issuer.token_queue = [token_response("machine-token-current", expires_in=2 * 86_400), HttpResponse(500, b"")]
+        check(clock, jti="j1")
+        clock.advance(86_400 + 10)
+
+        check(clock, jti="j2")
+
+        (line,) = records(caplog, "Token revocation: machine token refresh failed, using the current one")
+        assert "machine-token-current" not in f"{line.getMessage()} {line.__dict__!r}"
+
     def test_secret_and_tokens_never_reach_a_log(self, issuer, monkeypatch, clock, caplog, mock_secrets_manager):
         monkeypatch.setattr(ts, "SAMPLE_RATE", 1.0)
         user_token = "user.bearer.token-value"
