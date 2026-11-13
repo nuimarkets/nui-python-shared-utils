@@ -153,7 +153,8 @@ def main():
 
         def pytest_collection_finish(self, session):
             # The items as collection left them, held so no id is reused: a hook that later
-            # shrinks session.items must not shrink what has to finish.
+            # shrinks session.items must not shrink what has to finish, and items a hook adds
+            # are read from session.items at the end as well.
             self.collected = list(session.items)
 
         @pytest.hookimpl(hookwrapper=True)
@@ -201,7 +202,8 @@ def main():
         def pytest_sessionfinish(self, session, exitstatus):
             # pytest.exit(returncode=0) in a test or fixture ends the loop with a 0 and the rest
             # unrun: a pass needs every collected item to have finished.
-            self.complete = self.collected is not None and all(id(item) in self.finished for item in self.collected)
+            required = (self.collected or []) + list(getattr(session, "items", ()))
+            self.complete = self.collected is not None and all(id(item) in self.finished for item in required)
             if self.unexpected:
                 session.exitstatus = pytest.ExitCode.TESTS_FAILED
 

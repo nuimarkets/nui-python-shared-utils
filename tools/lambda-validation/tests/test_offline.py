@@ -595,3 +595,38 @@ def test_completion_accepts_a_real_suite_under_a_consumer_makereport_wrapper(tmp
         sys.executable, root, args, not_loaded=declared, allowed_skips=["tests/test_wrapped.py::test_b_setup_skip"]
     )
     assert run == 0
+
+
+# A conftest that appends items after collection; the first appended one ends the run.
+GROW_CONFTEST = """
+import pytest
+
+
+def _late():
+    pytest.exit("stop", returncode=0)
+
+
+def _never():
+    assert False
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtestloop(session):
+    parent = session.items[0].parent
+    session.items.append(pytest.Function.from_parent(parent, name="test_late", callobj=_late))
+    session.items.append(pytest.Function.from_parent(parent, name="test_never", callobj=_never))
+"""
+
+
+def test_completion_includes_items_added_after_collection(tmp_path):
+    from nui_lambda_validation.errors import ValidationError
+
+    root = tmp_path / "grow"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "conftest.py").write_text(GROW_CONFTEST)
+    (root / "tests" / "test_grow.py").write_text("def test_a_passes():\n    pass\n")
+    declared = {name: "unused" for name in installed_plugins()}
+    args = ["-q", "-p", "no:cacheprovider", "tests"]
+    with pytest.raises(ValidationError) as caught:
+        offline.run(sys.executable, root, args, not_loaded=declared)
+    assert caught.value.code == "OFFLINE_GUARD" and "'complete': False" in caught.value.detail
