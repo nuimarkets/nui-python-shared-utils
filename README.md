@@ -266,7 +266,28 @@ def lambda_handler(event, context):
     return {"statusCode": 200, "body": f"Hello {user_id}"}
 ```
 
-**[→ See JWT authentication guide](docs/guides/jwt-authentication.md)**
+#### Token status check (revocation)
+
+A token that passes the signature and expiry check can still have been revoked at the issuer. With
+`TOKEN_STATUS_URL` set, `require_auth` (and so `check_auth`) asks the issuer whether the token is still
+active, caching the answer in the process for at most 30 seconds, so a revocation takes effect within 30
+seconds plus one call. With `TOKEN_STATUS_URL` unset nothing changes: no call, no cache, no token fetch.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `TOKEN_STATUS_URL` | unset (check off) | The issuer's status endpoint: `POST {"jti": "..."}`, answering `200 {"active": true\|false}` |
+| `TOKEN_REVOCATION_MODE` | `off` | `off`, `shadow` (check and log, refuse nothing) or `enforce` (refuse with `AuthenticationError`) |
+| `TOKEN_REVOCATION_FAIL` | `open` | When the issuer cannot answer: `open` admits the token, `closed` refuses it |
+| `TOKEN_STATUS_TOKEN_URL` | unset | OAuth token endpoint for this service's own client-credentials token |
+| `TOKEN_STATUS_CLIENT_ID`, `TOKEN_STATUS_CLIENT_SECRET` | unset | The OAuth client, from the environment |
+| `TOKEN_STATUS_CREDENTIALS_SECRET` | unset | Or a Secrets Manager secret holding `client_id` and `client_secret` |
+
+Only `200 {"active": false}` is a revocation. Anything else (an error, a timeout, a redirect, a body over 1 KB)
+is `unavailable`, caches nothing and pauses calls for 10 seconds; the whole check, token fetch included, ends
+within 2 seconds. Standard library only, no new dependency.
+
+**[→ See JWT authentication guide](docs/guides/jwt-authentication.md)**, including
+[the token status check](docs/guides/jwt-authentication.md#token-status-check-revocation)
 
 ### Anthropic (Claude) Helper
 

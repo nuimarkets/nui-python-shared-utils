@@ -38,6 +38,7 @@ This is `nui-python-shared-utils`, a Python package providing production-ready u
 - **Database** (`db_client.py`) - Connection pooling with standardized error handling
 - **Metrics** (`cloudwatch_metrics.py`) - Batched CloudWatch publishing with decorators
 - **JWT Authentication** (`jwt_auth.py`) - RS256 token validation for API Gateway Lambdas (uses `rsa` package)
+- **Token Status Check** (`token_status.py`) - asks the token issuer whether a verified token is still active, behind `require_auth`; in-process cache and breaker, stdlib HTTP with a 2 s deadline; off unless `TOKEN_STATUS_URL` is set
 - **LLM Helper** (`llm.py`) - Generic Anthropic (Claude) client plumbing: API-key/Bedrock auth, forced tool-use call, text call (uses `anthropic`)
 - **Error Handling** (`error_handler.py`) - Retry patterns with exponential backoff
 - **Timezone Utils** (`timezone.py`) - Timezone conversion and formatting utilities (stdlib `zoneinfo`)

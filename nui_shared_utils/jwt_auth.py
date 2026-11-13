@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, AbstractSet, Any, Dict, Optional, Tuple
 from urllib.parse import unquote
 
 from .secrets_helper import get_secret
+from .token_status import should_reject_token
 
 if TYPE_CHECKING:
     import rsa
@@ -219,6 +220,11 @@ def require_auth(event: dict, secret_name: Optional[str] = None) -> dict:
 
     Handles both API Gateway v1 (REST) and v2 (HTTP API) event formats.
 
+    After the signature and expiry check, asks the token issuer whether the
+    token is still active when ``TOKEN_STATUS_URL`` is set (see
+    ``nui_shared_utils.token_status``). With ``TOKEN_REVOCATION_MODE=enforce``
+    a token the issuer reports revoked is refused with ``AuthenticationError``.
+
     Args:
         event: API Gateway Lambda proxy integration event.
         secret_name: Optional Secrets Manager secret name for the public key.
@@ -227,7 +233,8 @@ def require_auth(event: dict, secret_name: Optional[str] = None) -> dict:
         Decoded JWT claims dict.
 
     Raises:
-        AuthenticationError: If the Authorization header is missing, malformed, or token is invalid.
+        AuthenticationError: If the Authorization header is missing, malformed, or token is invalid,
+            or the token status check refuses the token.
     """
     auth_header = _extract_header(event, "Authorization")
     if not auth_header:
@@ -242,9 +249,14 @@ def require_auth(event: dict, secret_name: Optional[str] = None) -> dict:
 
     try:
         public_key = get_jwt_public_key(secret_name=secret_name)
-        return validate_jwt(token, public_key)
+        claims = validate_jwt(token, public_key)
     except JWTValidationError as e:
         raise AuthenticationError(f"Authentication failed: {e}") from e
+
+    if should_reject_token(claims):
+        raise AuthenticationError("Authentication failed: the token issuer did not confirm the token is active")
+
+    return claims
 
 
 def _normalize_path(path: str) -> str:
