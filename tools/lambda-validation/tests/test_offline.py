@@ -343,6 +343,15 @@ def test_xdist_is_refused(project, capfd):
         ("import os\n\ndef test_a_exit():\n    os._exit(0)\n\ndef test_b_fails():\n    assert False\n", []),
         (None, ["--collect-only"]),
         (None, ["--setup-only"]),
+        (
+            "import pytest\n\ndef test_a_exit():\n    pytest.exit('stop', returncode=0)\n\ndef test_b_fails():\n    assert False\n",
+            [],
+        ),
+        (
+            "import pytest\n\n@pytest.fixture\ndef stop():\n    pytest.exit('stop', returncode=0)\n\n"
+            "def test_a_exit(stop):\n    pass\n\ndef test_b_fails():\n    assert False\n",
+            [],
+        ),
     ],
 )
 def test_a_run_that_never_finished_or_ran_nothing_is_not_a_pass(project, extra_test, args):

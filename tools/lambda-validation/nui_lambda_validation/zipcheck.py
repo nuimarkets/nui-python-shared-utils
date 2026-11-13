@@ -1,7 +1,6 @@
 """Member-level checks on a deployment ZIP: safety, secrets, forbidden and required paths, size."""
 
 import hashlib
-import lzma
 import re
 import zipfile
 import zlib
@@ -64,13 +63,24 @@ def no_symlinks(infos):
         fail("UNSAFE_MEMBER", f"symlink members: {links[:10]}")
 
 
+# Stored and deflated only: Lambda's packagers write these, every supported Python reads them the
+# same way, and a member in any other method (bzip2, LZMA, zstd on 3.14) would get a verdict, or
+# an uncoded decompressor error, that depends on the interpreter running the check.
+MEMBER_METHODS = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
+
+
 def read_member(bundle, member):
-    """Read one member; a corrupt or unsupported member fails as UNREADABLE_ZIP."""
+    """Read one member; a corrupt member, or one in an unsupported method, fails as UNREADABLE_ZIP."""
     try:
-        return bundle.read(member)
-    except (OSError, zipfile.BadZipFile, NotImplementedError, RuntimeError, zlib.error, lzma.LZMAError) as error:
-        name = getattr(member, "filename", member)
-        fail("UNREADABLE_ZIP", f"{name}: {error}")
+        info = member if isinstance(member, zipfile.ZipInfo) else bundle.getinfo(member)
+    except KeyError as error:
+        fail("UNREADABLE_ZIP", f"{member}: {error}")
+    if info.compress_type not in MEMBER_METHODS:
+        fail("UNREADABLE_ZIP", f"{info.filename}: compression method {info.compress_type} is not stored or deflated")
+    try:
+        return bundle.read(info)
+    except (OSError, zipfile.BadZipFile, NotImplementedError, RuntimeError, zlib.error) as error:
+        fail("UNREADABLE_ZIP", f"{info.filename}: {error}")
 
 
 def secret_files(names):

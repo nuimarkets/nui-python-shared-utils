@@ -146,6 +146,11 @@ def main():
             self.unexpected = []
             self.allowed_seen = []
             self.ran = 0
+            self.finished = 0
+            self.complete = False
+
+        def pytest_runtest_logfinish(self, nodeid, location):
+            self.finished += 1
 
         def pytest_runtest_logreport(self, report):
             # An xfail reports as skipped with ``wasxfail`` and a non-strict xpass as passed
@@ -162,6 +167,9 @@ def main():
                 (self.allowed_seen if nodeid in allowed else self.unexpected).append(nodeid)
 
         def pytest_sessionfinish(self, session, exitstatus):
+            # pytest.exit(returncode=0) in a test or fixture ends the loop with a 0 and the rest
+            # unrun: a pass needs every collected item to have finished.
+            self.complete = self.finished == len(getattr(session, "items", ()))
             if self.unexpected:
                 session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
@@ -187,7 +195,7 @@ def main():
     # The launcher trusts a 0 only beside this record, so a run that never reached here
     # (`os._exit(0)` in a test) or ran no test (`--collect-only`) cannot pass.
     with open(policy["result"], "w") as record:
-        json.dump({"status": status, "ran": skips.ran}, record)
+        json.dump({"status": status, "ran": skips.ran, "complete": skips.complete}, record)
     return status
 
 

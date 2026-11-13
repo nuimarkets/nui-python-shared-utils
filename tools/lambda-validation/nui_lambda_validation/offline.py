@@ -74,6 +74,6 @@ def run(python, root, args, plugins=(), allowed_skips=(), passthrough=(), fixed_
                 record = json.loads(result.read_text())
             except (OSError, ValueError):
                 fail("OFFLINE_GUARD", "the suite exited 0 without finishing (no result from the runner)")
-            if record.get("status") != 0 or not record.get("ran"):
+            if record.get("status") != 0 or not record.get("ran") or not record.get("complete"):
                 fail("OFFLINE_GUARD", f"the suite exited 0 but the runner recorded {record}")
         return status

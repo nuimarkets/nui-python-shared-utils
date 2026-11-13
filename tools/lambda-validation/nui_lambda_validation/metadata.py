@@ -99,7 +99,7 @@ def _dist_name(directory):
     version is the last dash-separated part that starts with a digit, so a non-normalized
     hyphenated name (``pytest-cov-6.0.0.dist-info``) keeps all of itself."""
     stem = directory.rsplit(".", 1)[0]
-    if directory.endswith(".egg-info"):
+    if directory.lower().endswith(".egg-info"):
         stem = re.sub(r"-py\d+(?:\.\d+)*$", "", stem)
     if re.search(r"-\d[^-]*$", stem):
         stem = stem.rsplit("-", 1)[0]

@@ -888,3 +888,28 @@ def test_newer_targets_derive_their_own_tag(tmp_path, repo, python, full):
         assert code_of(artifact.check, write_zip(tmp_path / f"{other}.zip", dict(own, **{name: elf()})), adapter) == (
             "NATIVE_ABI"
         )
+
+
+@pytest.mark.parametrize("compression", [zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA])
+def test_only_stored_and_deflated_members_are_read(tmp_path, adapter, compression):
+    # An intact member in another method gets the same refusal on every Python, so the verdict
+    # does not depend on what the checking interpreter can decompress (zstd from 3.14).
+    path = tmp_path / "method.zip"
+    with zipfile.ZipFile(path, "w") as bundle:
+        for name, data in base_members().items():
+            bundle.writestr(name, data, compression if name == "handler.py" else zipfile.ZIP_STORED)
+    with pytest.raises(ValidationError) as caught:
+        artifact.check(path, adapter)
+    assert caught.value.code == "UNREADABLE_ZIP" and "not stored or deflated" in caught.value.detail
+    assert code_of(extract, path, tmp_path / "out") == "UNREADABLE_ZIP"
+
+
+@pytest.mark.parametrize("member", ["Pytest-8.4.2.DIST-INFO/RECORD", "pytest-8.4.2-py3.12.EGG-INFO/PKG-INFO"])
+def test_test_only_leak_matches_metadata_in_any_case(member):
+    from nui_lambda_validation.metadata import test_only
+
+    production = {"app-lib": "1.0.0"}
+    joint = dict(production, pytest="8.4.2")
+    with pytest.raises(ValidationError) as caught:
+        test_only([member], production, joint, {"pytest": ["pytest", "_pytest"]})
+    assert caught.value.code == "TEST_ONLY_LEAK"
