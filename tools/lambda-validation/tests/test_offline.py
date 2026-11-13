@@ -656,3 +656,77 @@ def test_completion_keeps_an_appended_item_that_started_after_it_is_removed(tmp_
     with pytest.raises(ValidationError) as caught:
         offline.run(sys.executable, root, args, not_loaded=declared)
     assert caught.value.code == "OFFLINE_GUARD" and "'complete': False" in caught.value.detail
+
+
+# An override that runs an item's setup and call and never its teardown, so a failing
+# finalizer would never report.
+SETUP_CALL_CONFTEST = """
+import pytest
+from _pytest.runner import call_and_report
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_protocol(item, nextitem):
+    if item.name != "test_b_no_teardown":
+        return None
+    item.ihook.pytest_runtest_logstart(nodeid=item.nodeid, location=item.location)
+    call_and_report(item, "setup", log=True)
+    call_and_report(item, "call", log=True)
+    item.ihook.pytest_runtest_logfinish(nodeid=item.nodeid, location=item.location)
+    return True
+"""
+
+# A run loop that runs the first collected item only, then drops the rest from session.items.
+LOOP_DROPS_COLLECTED_CONFTEST = """
+import pytest
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtestloop(session):
+    first = session.items[0]
+    first.config.hook.pytest_runtest_protocol(item=first, nextitem=None)
+    session.items[:] = [first]
+    return True
+"""
+
+# A run loop that appends an item, then runs only the collected ones.
+LOOP_SKIPS_APPENDED_CONFTEST = """
+import pytest
+
+
+def _never():
+    assert False
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtestloop(session):
+    collected = list(session.items)
+    session.items.append(pytest.Function.from_parent(collected[0].parent, name="test_never", callobj=_never))
+    for index, item in enumerate(collected):
+        nextitem = collected[index + 1] if index + 1 < len(collected) else None
+        item.config.hook.pytest_runtest_protocol(item=item, nextitem=nextitem)
+    return True
+"""
+
+
+@pytest.mark.parametrize(
+    "conftest, suite",
+    [
+        (SETUP_CALL_CONFTEST, "def test_a_passes():\n    pass\n\ndef test_b_no_teardown():\n    pass\n"),
+        (LOOP_DROPS_COLLECTED_CONFTEST, "def test_a_passes():\n    pass\n\ndef test_b_dropped():\n    assert False\n"),
+        (LOOP_SKIPS_APPENDED_CONFTEST, "def test_a_passes():\n    pass\n"),
+    ],
+    ids=["no-teardown", "loop-drops-collected", "loop-skips-appended"],
+)
+def test_completion_needs_every_required_item_run_through_teardown(tmp_path, conftest, suite):
+    from nui_lambda_validation.errors import ValidationError
+
+    root = tmp_path / "loop"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "conftest.py").write_text(conftest)
+    (root / "tests" / "test_loop.py").write_text(suite)
+    declared = {name: "unused" for name in installed_plugins()}
+    args = ["-q", "-p", "no:cacheprovider", "tests"]
+    with pytest.raises(ValidationError) as caught:
+        offline.run(sys.executable, root, args, not_loaded=declared)
+    assert caught.value.code == "OFFLINE_GUARD" and "'complete': False" in caught.value.detail
