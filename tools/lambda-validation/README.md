@@ -37,16 +37,18 @@ Add `.venv-validation/` to `.gitignore` and keep `lambda-validation.toml`,
 
 ## Commands
 
-Every failure exits 1 and prints `CODE: detail` on stderr, except `offline-pytest`, which
-exits with pytest's own status (3 with an `OFFLINE_GUARD:` line on stderr when the runner
-itself refuses). Codes are listed in `nui_lambda_validation/errors.py`; negative controls
+Every failure exits 1 and prints `CODE: detail` on stderr. `offline-pytest` is the one
+exception once the suite starts: it exits with pytest's own status, and a refusal inside the
+test interpreter (the network guard, the plugin policy) exits 3 with an `OFFLINE_GUARD:`
+line. A refusal by the launcher, before the suite starts or after it exits 0 without a
+finished run, is `CODE: detail` with exit 1 like every other command. Codes are listed in `nui_lambda_validation/errors.py`; negative controls
 assert the code, not the text. A failure in the container smoke reports as `BUILD` with the
 in-container check's own code in its detail.
 
 | Command | What it does |
 | --- | --- |
-| `verify --config lambda-validation.toml --output DIR` | Fails `SELF_CHECK` unless the running tool is the commit the committed `requirements-validation.txt` pins. Pulls the runtime image and every `build_images` entry that is not on the host (`--platform` from `[target] machine`; a failed pull is `BUILD`), so a consumer needs no pull step of its own. Builds every stage from `git archive HEAD` with synthetic configuration, then per stage: secret scan, `check-zip`, extraction proof, a check that the image runs the `[target]` Python, the adapter's smoke script in the Lambda image, and `pip check` in the image over the artifact itself (`/var/task` on `PYTHONPATH`, since `python -m pip` drops the working directory from `sys.path`); the first stage also runs `negatives`. Each stage's package is written to `.serverless-validation-<stage>/` inside the build tree, so the repository's package patterns must exclude `.serverless-*/**`. `[container.env]` may not set a variable the container command sets itself. The adapter, its lock files and its smoke script are read from the committed tree, never the working copy, and the adapter must sit at the repository's top level. Records the digests of the runtime image and of every `build_images` entry. Copies each compiled template out for the repository's own assertions. `DIR` must be new and outside the checkout |
-| `check-zip ZIP --config ...` | Member safety, secrets, exclusions, required paths, size, native ABI/ELF, dependency pins and closure, test-only leaks, optional major drift. Every member is read, so a corrupt one fails `UNREADABLE_ZIP` wherever it is. Member names must be canonical (`./a.py`, `pkg//a.py` fail `UNSAFE_MEMBER`). A CPython extension must be named `.cpython-XY-<machine>-linux-gnu.so` or `.abi3.so` for the `[target]` (`NATIVE_ABI`). Distribution metadata is read from top-level `*.dist-info/METADATA` only, and a `*.dist-info` or `*.egg-info` directory at any lower depth fails `METADATA_INVALID`. A `.serverless-validation-<stage>` directory is `TOOL_IN_ARTIFACT` |
+| `verify --config lambda-validation.toml --output DIR` | Fails `SELF_CHECK` unless the running tool is the commit the committed `requirements-validation.txt` pins. Pulls the runtime image and every `build_images` entry that is not on the host (`--platform` from `[target] machine`; a failed pull is `BUILD`), so a consumer needs no pull step of its own. Builds every stage from `git archive HEAD` with synthetic configuration, then per stage: secret scan, `check-zip`, extraction proof, a check that the image runs the `[target]` Python, the adapter's smoke script in the Lambda image, and `pip check` in the image over the artifact together with the image's own packages, as Lambda resolves them (`/var/task` first on `PYTHONPATH`, since `python -m pip` drops the working directory from `sys.path`; the artifact-only closure is the host check and `runtime.check_inventory`); the first stage also runs `negatives`. Each stage's package is written to `.serverless-validation-<stage>/` inside the build tree, so the repository's package patterns must exclude `.serverless-*/**`. `[container.env]` may not set a variable the container command sets itself. The adapter, its lock files and its smoke script are read from the committed tree, never the working copy, and the adapter must sit at the repository's top level. Records the digests of the runtime image and of every `build_images` entry. Copies each compiled template out for the repository's own assertions. `DIR` must be new and outside the checkout |
+| `check-zip ZIP --config ...` | Member safety, secrets, exclusions, required paths, size, native ABI/ELF, dependency pins and closure, test-only leaks, optional major drift. Every member is read, so a corrupt one fails `UNREADABLE_ZIP` wherever it is. Member names must be canonical (`./a.py`, `pkg//a.py` fail `UNSAFE_MEMBER`). A CPython extension must be named `.cpython-XY-<machine>-linux-gnu.so` or `.abi3.so` for the `[target]` (`NATIVE_ABI`). Distribution metadata is read from top-level `*.dist-info/METADATA` only, and a `*.dist-info` or `*.egg-info` directory at any lower depth, or a top-level one in any other case (`.DIST-INFO`), fails `METADATA_INVALID`. A requirement marker on `platform_release` or `platform_version` fails `MARKER_UNSUPPORTED`: only the check host could answer it, not the target. A `.serverless-validation-<stage>` directory is `TOOL_IN_ARTIFACT` |
 | `negatives ZIP --config ... --output DIR` | Mutates the ZIP once per standard defect and once per configured exclusion rule; fails unless each mutant is rejected with its intended code. A standard mutant the artifact cannot support (no SDK path in `[zip] required`, no `botocore` metadata) must be declared in `[negatives.not_applicable]` with a reason, and the reasons are written beside the results |
 | `extract ZIP DIR` | Extracts and proves the files on disk are exactly the members, byte for byte |
 | `offline-pytest --config ... --python APP_PYTHON [-- ARGS]` | Runs the application's suite in its own interpreter under the offline policy below |
@@ -169,7 +171,7 @@ however it arrives: a `conftest.py` or test module's `pytest_plugins`, or an imp
 tests run. `xdist` is refused,
 since its workers would run without the guard. A run that exits 0 counts only when the runner
 recorded it finishing with at least one test run, so `os._exit(0)` in a test or
-`--collect-only` fails with `OFFLINE_GUARD`. Name resolution is not blocked. It runs the application's interpreter, which must be Python 3.11 or newer, with
+`--collect-only` fails with `OFFLINE_GUARD`. Name resolution is not blocked. It runs the application's interpreter, which must be Python 3.11 or newer with pytest 7 or newer, with
 `-P` so this package is not on the application's path; install this tool in its own
 environment, as above, or the suite can still import it. It is not an OS-level sandbox: a
 subprocess a test starts inherits the cleared environment but not the socket guard. Use the
@@ -178,8 +180,15 @@ container checks (`--network none`) for anything that must hold at the kernel le
 ## Development
 
 The suite runs from this directory in its own environment. The container tests use the
-local `public.ecr.aws/lambda/python:3.12` and `:3.11` images and pull them when missing;
-the workflow requires zero skips.
+local `public.ecr.aws/lambda/python` images 3.11 to 3.14 and pull them when missing; the
+workflow runs it on Python 3.11 to 3.14 and requires zero skips.
+
+`verify` runs `self-check` first, so it needs the tool installed from a commit, never from a
+working copy (an editable or directory install records no commit). To try an unpushed
+change against a consumer, commit it, install it into the consumer's validation venv with
+`pip install "git+file:///path/to/nui-python-shared-utils@<sha>#subdirectory=tools/lambda-validation"`,
+and commit that sha in the consumer's `requirements-validation.txt` line, which keeps its
+`git+https://` URL: only the commit is compared.
 
 ```bash
 python -m venv .venv

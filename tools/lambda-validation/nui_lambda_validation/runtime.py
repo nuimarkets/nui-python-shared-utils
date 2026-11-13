@@ -162,7 +162,11 @@ def check_native(modules, plain_libraries=(), root=TASK_ROOT):
     tag = f"cpython-{sys.version_info.major}{sys.version_info.minor}"
     loaded = []
     for name in modules:
-        path = Path(importlib.import_module(name).__file__)
+        try:
+            module = importlib.import_module(name)
+        except ImportError as error:
+            _fail("NATIVE_EXPECTED", f"{name} failed to import: {error}")
+        path = Path(module.__file__)
         if not path.resolve().is_relative_to(root) or path.suffix != ".so":
             _fail("NATIVE_EXPECTED", f"{name} loaded from {path}")
         if tag not in path.name and ".abi3.so" not in path.name:

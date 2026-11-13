@@ -14,6 +14,7 @@ CODES = frozenset(
         "EXTRACTION_MISMATCH",
         "FORBIDDEN_PATH",
         "MAJOR_DRIFT",
+        "MARKER_UNSUPPORTED",
         "METADATA_DUPLICATE",
         "METADATA_INVALID",
         "MISSING_REQUIRED_PATH",

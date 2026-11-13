@@ -5,6 +5,7 @@ would otherwise silently drop the check it configures.
 """
 
 import re
+import string
 from pathlib import Path
 
 import tomllib
@@ -158,10 +159,13 @@ class Adapter:
             fail("ADAPTER_CONFIG", f"[zip.forbidden] top_level takes bare path components, got {names}")
         config_path = self.get("build").get("config_path")
         if config_path is not None:
+            # Parsed, not formatted: `{stage.x}` or `{stage[0]}` would format, or raise uncoded.
             try:
-                config_path.format(stage="stage")
-            except (KeyError, IndexError, ValueError) as error:
-                fail("ADAPTER_CONFIG", f"[build] config_path may name only {{stage}}: {error!r}")
+                fields = [field for field in string.Formatter().parse(config_path) if field[1] is not None]
+            except ValueError as error:
+                fail("ADAPTER_CONFIG", f"[build] config_path may name only {{stage}}: {error}")
+            if any(name != "stage" or spec or conversion for _, name, spec, conversion in fields):
+                fail("ADAPTER_CONFIG", f"[build] config_path may name only {{stage}}, got {config_path!r}")
         limit = self.get("zip").get("uncompressed_limit", LAMBDA_UNZIPPED_LIMIT)
         if not 0 < limit <= LAMBDA_UNZIPPED_LIMIT:
             fail(

@@ -1,6 +1,7 @@
 """Member-level checks on a deployment ZIP: safety, secrets, forbidden and required paths, size."""
 
 import hashlib
+import lzma
 import re
 import zipfile
 import zlib
@@ -17,8 +18,9 @@ LAMBDA_UNZIPPED_LIMIT = 250 * 1024 * 1024
 TOOL_PACKAGE = "nui_lambda_validation"
 # Validation-only files an adapter keeps in its repository. None may ship.
 TOOL_FILES = ("lambda-validation.toml", "requirements-validation.txt")
-# Distribution metadata directories (`nui_lambda_validation-0.1.0.dist-info`, `.egg-info`).
+# Where verify packages each stage; a ZIP that carries one carries another stage's package.
 VERIFY_OUTPUT = ".serverless-validation-"
+# Distribution metadata directories (`nui_lambda_validation-0.1.0.dist-info`, `.egg-info`).
 TOOL_DIST_PREFIXES = tuple(f"{name}{sep}" for name in (TOOL_PACKAGE, "nui-lambda-validation") for sep in "-.")
 
 
@@ -66,7 +68,7 @@ def read_member(bundle, member):
     """Read one member; a corrupt or unsupported member fails as UNREADABLE_ZIP."""
     try:
         return bundle.read(member)
-    except (OSError, zipfile.BadZipFile, NotImplementedError, RuntimeError, zlib.error) as error:
+    except (OSError, zipfile.BadZipFile, NotImplementedError, RuntimeError, zlib.error, lzma.LZMAError) as error:
         name = getattr(member, "filename", member)
         fail("UNREADABLE_ZIP", f"{name}: {error}")
 

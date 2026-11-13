@@ -292,32 +292,34 @@ def fake_plugin(tmp_path):
     return {"PYTHONPATH": str(site)}
 
 
+# A conftest's pytest_plugins registers at configuration, a test module's during collection,
+# an import inside a test only while tests run. One registered before the tests start must stop
+# the run before any test body: MARKER is written by a test body or a runtest hook.
+CONFTEST_ROUTE = "pytest_plugins = ['fakeplug']\n\ndef pytest_runtest_call(item):\n    open(MARKER, 'w').close()\n"
+MODULE_ROUTE = "pytest_plugins = ['fakeplug']\n\ndef test_x():\n    open(MARKER, 'w').close()\n"
+LATE_ROUTE = "def test_late(request):\n    request.config.pluginmanager.import_plugin('fakeplug')\n"
+
+
 @pytest.mark.parametrize(
-    "args, conftest, message",
+    "args, conftest, module, message",
     [
-        (["-p", "fakeplug_ep"], None, "not -p in the arguments"),
-        (["-pfakeplug_ep"], None, "not -pfakeplug_ep in the arguments"),
-        ([], "pytest_plugins = ['fakeplug']\n", "plugins loaded outside [offline] plugins: ['fakeplug_ep']"),
-        (
-            [],
-            "MODULE:pytest_plugins = ['fakeplug']\n\ndef test_x():\n    pass\n",
-            "outside [offline] plugins: ['fakeplug_ep']",
-        ),
-        (
-            [],
-            "MODULE:def test_late(request):\n    request.config.pluginmanager.import_plugin('fakeplug')\n",
-            "outside [offline] plugins: ['fakeplug_ep']",
-        ),
+        (["-p", "fakeplug_ep"], None, None, "not -p in the arguments"),
+        (["-pfakeplug_ep"], None, None, "not -pfakeplug_ep in the arguments"),
+        ([], CONFTEST_ROUTE, None, "plugins loaded outside [offline] plugins: ['fakeplug_ep']"),
+        ([], None, MODULE_ROUTE, "outside [offline] plugins: ['fakeplug_ep']"),
+        ([], None, LATE_ROUTE, "outside [offline] plugins: ['fakeplug_ep']"),
     ],
 )
-def test_a_plugin_declared_not_loaded_cannot_load_another_way(project, tmp_path, capfd, args, conftest, message):
+def test_a_plugin_declared_not_loaded_cannot_load_another_way(
+    project, tmp_path, capfd, args, conftest, module, message
+):
     env = fake_plugin(tmp_path)
-    # A conftest's pytest_plugins registers at configuration; a test module's only during
-    # collection; an import inside a test only while tests run.
-    if conftest and conftest.startswith("MODULE:"):
-        (project / "tests" / "test_plugin_route.py").write_text(conftest[len("MODULE:") :])
-    elif conftest:
-        (project / "tests" / "conftest.py").write_text(conftest)
+    marker = tmp_path / "a-test-ran"
+    prefix = f"MARKER = {str(marker)!r}\n"
+    if conftest:
+        (project / "tests" / "conftest.py").write_text(prefix + conftest)
+    if module:
+        (project / "tests" / "test_plugin_route.py").write_text(prefix + module)
     declared = {name: "unused" for name in installed_plugins()}
     declared["fakeplug_ep"] = "declared not loaded"
     skips = ["tests/test_skips.py::test_allowed"]
@@ -327,6 +329,7 @@ def test_a_plugin_declared_not_loaded_cannot_load_another_way(project, tmp_path,
     )
     assert status == 3
     assert message in capfd.readouterr().err
+    assert not marker.exists(), "a test ran with a plugin the policy refused"
 
 
 def test_xdist_is_refused(project, capfd):
@@ -339,6 +342,7 @@ def test_xdist_is_refused(project, capfd):
     [
         ("import os\n\ndef test_a_exit():\n    os._exit(0)\n\ndef test_b_fails():\n    assert False\n", []),
         (None, ["--collect-only"]),
+        (None, ["--setup-only"]),
     ],
 )
 def test_a_run_that_never_finished_or_ran_nothing_is_not_a_pass(project, extra_test, args):
@@ -365,3 +369,31 @@ def test_collection_skip_can_be_allowed_by_its_node_id(project):
     )
     skips = ["tests/test_skips.py::test_allowed", "tests/test_module_skip.py"]
     assert run(project, allowed_skips=skips) == 0
+
+
+def test_a_run_of_allowed_skips_alone_is_not_a_pass(project):
+    from nui_lambda_validation.errors import ValidationError
+
+    declared = {name: "unused" for name in installed_plugins()}
+    with pytest.raises(ValidationError) as caught:
+        offline.run(
+            sys.executable,
+            project,
+            ["-q", "-p", "no:cacheprovider", "tests/test_skips.py"],
+            allowed_skips=["tests/test_skips.py::test_allowed"],
+            not_loaded=declared,
+        )
+    assert caught.value.code == "OFFLINE_GUARD" and "'ran': 0" in caught.value.detail
+
+
+def test_registration_hook_runs_on_pytest_7():
+    # pytest 7's pytest_plugin_registered hookspec has no plugin_name, and pluggy refuses a
+    # hookimpl that asks for an argument the hookspec lacks.
+    import importlib.util
+    import inspect
+
+    spec = importlib.util.spec_from_file_location("bootstrap_for_signature", offline.BOOTSTRAP)
+    bootstrap = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bootstrap)
+    parameters = list(inspect.signature(bootstrap.PluginPolicy.pytest_plugin_registered).parameters)
+    assert parameters == ["self", "plugin", "manager"]

@@ -13,10 +13,10 @@ permissions:
 jobs:
   tool:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       matrix:
-        python-version: ['3.11', '3.12']
+        python-version: ['3.11', '3.12', '3.13', '3.14']
     defaults:
       run:
         working-directory: tools/lambda-validation
@@ -39,8 +39,9 @@ jobs:
           "$RUNNER_TEMP/lint/bin/black" -l 120 --check .
       - name: Pull the Lambda runtime images the container tests use
         run: |
-          docker pull --platform linux/amd64 public.ecr.aws/lambda/python:3.12
-          docker pull --platform linux/amd64 public.ecr.aws/lambda/python:3.11
+          for version in 3.11 3.12 3.13 3.14; do
+            docker pull --platform linux/amd64 "public.ecr.aws/lambda/python:$version"
+          done
       - name: Tool tests, zero skips
         run: |
           "$RUNNER_TEMP/lv/bin/python" -m pytest -p no:cacheprovider -c /dev/null --rootdir . \

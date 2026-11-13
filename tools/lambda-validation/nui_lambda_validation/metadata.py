@@ -112,14 +112,19 @@ def zip_distributions(bundle):
     A top-level ``*.egg-info`` is refused: the runtime's ``importlib.metadata`` would count it
     as a distribution that these host checks never saw. So is a ``*.dist-info`` or
     ``*.egg-info`` directory at any lower depth: nothing installs one there, and a second copy
-    of a distribution's metadata hidden below the top level would otherwise pass unseen."""
+    of a distribution's metadata hidden below the top level would otherwise pass unseen.
+    Suffixes are compared case-insensitively, as ``importlib.metadata`` matches them, and a
+    top-level ``.DIST-INFO`` that is not spelled in lower case is refused rather than skipped."""
     found = {}
     for name in bundle.namelist():
         path = PurePosixPath(name)
-        if any(part.endswith((".dist-info", ".egg-info")) for part in path.parts[1:]):
+        lowered = [part.lower() for part in path.parts]
+        if any(part.endswith((".dist-info", ".egg-info")) for part in lowered[1:]):
             fail("METADATA_INVALID", f"distribution metadata below the top level: {name}")
-        if len(path.parts) >= 1 and path.parts[0].endswith(".egg-info"):
+        if lowered and lowered[0].endswith(".egg-info"):
             fail("METADATA_INVALID", f"egg-info distributions are not supported: {path.parts[0]}")
+        if lowered and lowered[0].endswith(".dist-info") and not path.parts[0].endswith(".dist-info"):
+            fail("METADATA_INVALID", f"non-canonical dist-info directory: {path.parts[0]}")
         if len(path.parts) != 2 or path.name != "METADATA" or not path.parts[0].endswith(".dist-info"):
             continue
         message = BytesParser().parsebytes(read_member(bundle, name))
@@ -170,6 +175,18 @@ def target_environment(python_full_version, machine):
     return environment
 
 
+# Marker fields whose value is the build host's, which no target description can supply.
+HOST_ONLY_MARKER = re.compile(r"\bplatform_(?:release|version)\b")
+
+
+def _evaluate(marker, environment, where):
+    """Evaluate ``marker`` for the target. One naming a host-only field would be decided by the
+    machine running the check, not the Lambda runtime, so it is refused rather than guessed."""
+    if HOST_ONLY_MARKER.search(str(marker)):
+        fail("MARKER_UNSUPPORTED", f"{where}: marker `{marker}` depends on the build host, not the target")
+    return marker.evaluate(environment)
+
+
 def closure(distributions, roots, environment, pins=None):
     """Walk Requires-Dist from ``roots`` under ``environment``, propagating extras.
 
@@ -184,7 +201,7 @@ def closure(distributions, roots, environment, pins=None):
     errors = {"CLOSURE_ROOT": [], "CLOSURE_MISSING": [], "REQUIRES_PYTHON": [], "CLOSURE_DEPENDENCY": []}
     extras = {}
     for req in roots:
-        if req.marker is not None and not req.marker.evaluate(dict(environment, extra="")):
+        if req.marker is not None and not _evaluate(req.marker, dict(environment, extra=""), f"root {req}"):
             continue
         name = canonicalize_name(req.name)
         extras.setdefault(name, set()).update(req.extras)
@@ -208,7 +225,7 @@ def closure(distributions, roots, environment, pins=None):
         for raw in data["requires"]:
             req = _requirement(raw, data["path"])
             if req.marker is not None and not any(
-                req.marker.evaluate(dict(environment, extra=extra)) for extra in [""] + sorted(wanted)
+                _evaluate(req.marker, dict(environment, extra=extra), data["path"]) for extra in [""] + sorted(wanted)
             ):
                 continue
             dependency = canonicalize_name(req.name)
@@ -248,7 +265,7 @@ def test_only(names, production, joint, mapping):
         root = PurePosixPath(name).parts[0]
         if root in forbidden:
             hits.append(name)
-        elif root.endswith((".dist-info", ".egg-info")):
+        elif root.lower().endswith((".dist-info", ".egg-info")):
             dist = _dist_name(root)
             if dist in exclusive:
                 hits.append(name)

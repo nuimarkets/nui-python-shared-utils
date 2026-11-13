@@ -95,7 +95,10 @@ class PluginPolicy:
         }
         self.loaded = []
 
-    def pytest_plugin_registered(self, plugin, plugin_name, manager):
+    # No `plugin_name` argument: pytest 7's hookspec lacks it, and pluggy refuses a hookimpl
+    # that asks for one, so the name comes from the manager.
+    def pytest_plugin_registered(self, plugin, manager):
+        plugin_name = manager.get_name(plugin)
         module = getattr(plugin, "__name__", None)
         for name, entry_module in self.forbidden.items():
             if (plugin_name == name or module == entry_module) and name not in self.loaded:

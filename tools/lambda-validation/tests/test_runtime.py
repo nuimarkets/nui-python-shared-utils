@@ -15,6 +15,14 @@ from nui_lambda_validation import container, runtime
 
 PACKAGE = Path(runtime.__file__).resolve().parent
 IMAGE = "public.ecr.aws/lambda/python:3.12"
+# Every Lambda Python image the in-container module must run in, each with its own vendored packaging.
+IMAGES = tuple(f"public.ecr.aws/lambda/python:{version}" for version in ("3.11", "3.12", "3.13", "3.14"))
+
+
+def local_image(name):
+    if subprocess.run(["docker", "image", "inspect", name], capture_output=True).returncode != 0:
+        subprocess.run(["docker", "pull", "--platform", "linux/amd64", "-q", name], check=True, capture_output=True)
+    return name
 
 
 def fake_root(root, sdk_version="1.44.1", metadata_version=None, drop=()):
@@ -237,20 +245,37 @@ def test_container_mount_is_read_only_and_offline(tmp_path, image):
     assert {"RO_TASK", "RO_TOOL", "NO_NETWORK"} <= set(result.stdout.split()), result.stdout + result.stderr
 
 
-def test_container_runtime_module_on_older_image(tmp_path, image):
-    """The 3.11 image ships an older vendored packaging (21.3); the module must still work there."""
-    older = "public.ecr.aws/lambda/python:3.11"
-    if subprocess.run(["docker", "image", "inspect", older], capture_output=True).returncode != 0:
-        subprocess.run(["docker", "pull", "--platform", "linux/amd64", "-q", older], check=True, capture_output=True)
+@pytest.mark.parametrize("name", IMAGES)
+def test_container_runtime_module_in_every_image(tmp_path, name):
+    """Each image vendors its own packaging (21.3 in 3.11, 26.2 in 3.13 and 3.14); the module
+    must import it and run the shared checks in every one."""
+    image = local_image(name)
+    probe = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--entrypoint",
+            "/var/lang/bin/python",
+            image,
+            "-c",
+            "from pip._vendor.packaging.requirements import Requirement; print('VENDORED_PACKAGING')",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert "VENDORED_PACKAGING" in probe.stdout, probe.stderr
     script = tmp_path / "smoke.py"
     script.write_text(SMOKE)
     proof = tmp_path / "proof"
     proof.mkdir()
     (proof / "pins.json").write_text(json.dumps({"boto3": "1.44.1", "botocore": "1.44.1", "s3transfer": "0.19.3"}))
-    command = container.argv(older, fake_root(tmp_path / "task"), "x86_64", script=script, args=("owned",), proof=proof)
+    command = container.argv(image, fake_root(tmp_path / "task"), "x86_64", script=script, args=("owned",), proof=proof)
     result = subprocess.run(command, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert "PINS 3" in result.stdout
+    assert "NETWORK_GUARD_EFFECTIVE" in result.stdout and "PINS 3" in result.stdout
 
 
 def test_sdk_module_imported_from_outside_the_artifact(tmp_path):
@@ -444,7 +469,7 @@ for line in sys.stdin.read().splitlines():
 """
 
 
-def test_prerelease_rule_is_the_same_on_the_host_and_in_both_images(tmp_path, image):
+def test_prerelease_rule_is_the_same_on_the_host_and_in_every_image(tmp_path, image):
     from packaging.requirements import Requirement
 
     from nui_lambda_validation import metadata as host
@@ -458,7 +483,7 @@ def test_prerelease_rule_is_the_same_on_the_host_and_in_both_images(tmp_path, im
         [sys.executable, "-I", "-B", str(script), str(PACKAGE.parent)], input=rows, capture_output=True, text=True
     )
     assert result.stdout.split() == expected, result.stderr
-    for name in (IMAGE, "public.ecr.aws/lambda/python:3.11"):
+    for name in map(local_image, IMAGES):
         command = container.argv(
             name, fake_root(tmp_path / name.rsplit(":", 1)[1]), "x86_64", script=script, args=(container.TOOL_MOUNT,)
         )
@@ -470,4 +495,15 @@ def test_prerelease_rule_is_the_same_on_the_host_and_in_both_images(tmp_path, im
 def test_declared_library_missing(tmp_path):
     root = fake_root(tmp_path / "task")
     out = run_host(root, "runtime.check_native([], plain_libraries=['vendor/missing.so'], root=root)")
-    assert "CODE NATIVE_EXPECTED" in out, out
+    assert "CODE NATIVE_EXPECTED" in out and "missing from the artifact" in out, out
+
+
+def test_an_extension_that_fails_to_import_is_coded(tmp_path):
+    import importlib.machinery
+
+    root = fake_root(tmp_path / "task")
+    (root / "pkg").mkdir()
+    (root / "pkg" / "__init__.py").write_text("")
+    (root / "pkg" / f"_ext{importlib.machinery.EXTENSION_SUFFIXES[0]}").write_bytes(b"not an ELF object")
+    out = run_host(root, "runtime.check_native(['pkg._ext'], root=root)")
+    assert "CODE NATIVE_EXPECTED" in out and "failed to import" in out, out

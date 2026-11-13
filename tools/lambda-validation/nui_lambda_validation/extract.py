@@ -13,8 +13,9 @@ def extract(archive, destination):
     if destination.exists():
         fail("EXTRACTION_MISMATCH", f"destination already exists: {destination}")
     with open_zip(archive) as bundle:
+        # Directory entries count for safety (a `name/` beside a file `name`), not for hashes.
+        member_safety([info.filename for info in bundle.infolist()])
         infos = [info for info in bundle.infolist() if not info.is_dir()]
-        member_safety([info.filename for info in infos])
         expected = {info.filename: hashlib.sha256(read_member(bundle, info)).hexdigest() for info in infos}
         try:
             bundle.extractall(destination)

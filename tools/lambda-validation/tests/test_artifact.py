@@ -543,26 +543,31 @@ def test_extraction_write_failure_is_coded(tmp_path, good_zip):
     assert code_of(extract, good_zip, blocker / "out") == "UNREADABLE_ZIP"
 
 
-def _corrupt_deflated(tmp_path, member):
-    """Write the base artifact with ``member`` deflated, then break its deflate stream."""
+def _corrupt_deflated(tmp_path, member, compression=zipfile.ZIP_DEFLATED):
+    """Write the base artifact with ``member`` compressed, then break its compressed stream."""
     path = tmp_path / "deflated.zip"
     with zipfile.ZipFile(path, "w") as bundle:
         for name, data in base_members().items():
-            bundle.writestr(name, data, zipfile.ZIP_DEFLATED if name == member else zipfile.ZIP_STORED)
+            bundle.writestr(name, data, compression if name == member else zipfile.ZIP_STORED)
     with zipfile.ZipFile(path) as bundle:
         info = bundle.getinfo(member)
     data = bytearray(path.read_bytes())
     start = info.header_offset + 30 + len(info.filename.encode()) + len(info.extra)
-    data[start] = 0xFF  # an invalid deflate block type: zlib.error, not a CRC failure
+    if compression == zipfile.ZIP_LZMA:
+        for index in range(start + 4, start + info.compress_size):  # past the LZMA properties header
+            data[index] ^= 0xFF
+    else:
+        data[start] = 0xFF  # an invalid deflate block type: zlib.error, not a CRC failure
     path.write_bytes(bytes(data))
     with zipfile.ZipFile(path) as bundle, pytest.raises(Exception) as raw:
         bundle.read(member)
-    assert type(raw.value).__module__ == "zlib"
+    assert type(raw.value).__module__ in ("zlib", "_lzma")
     return path
 
 
-def test_corrupt_deflated_member_is_coded(tmp_path, adapter):
-    bad = _corrupt_deflated(tmp_path, "helper-2.1.0.dist-info/METADATA")
+@pytest.mark.parametrize("compression", [zipfile.ZIP_DEFLATED, zipfile.ZIP_LZMA])
+def test_corrupt_deflated_member_is_coded(tmp_path, adapter, compression):
+    bad = _corrupt_deflated(tmp_path, "helper-2.1.0.dist-info/METADATA", compression)
     assert code_of(artifact.check, bad, adapter) == "UNREADABLE_ZIP"
     assert code_of(extract, bad, tmp_path / "out") == "UNREADABLE_ZIP"
 
@@ -589,6 +594,7 @@ def test_directory_entry_beside_a_file_of_the_same_name(tmp_path, adapter, order
         "botocore-1.44.1.dist-info/boto3-1.44.1.dist-info/METADATA",
         "vendor/helper-2.1.0.egg-info/PKG-INFO",
         "vendor/stray.dist-info/",
+        "vendor/Stray-1.0.DIST-INFO/METADATA",
     ],
 )
 def test_distribution_metadata_below_the_top_level(tmp_path, adapter, member):
@@ -775,7 +781,18 @@ def test_adapter_refuses_keys_that_would_never_be_read(repo, old, new):
     assert code_of(Adapter, repo / "lambda-validation.toml") == "ADAPTER_CONFIG"
 
 
-@pytest.mark.parametrize("path", ["config/{other}.yml", "config/{}.yml", "config/{stage.yml"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "config/{other}.yml",
+        "config/{}.yml",
+        "config/{stage.yml",
+        "config/{stage.x}.yml",
+        "config/{stage[0]}.yml",
+        "config/{stage!r}.yml",
+        "config/{stage:>5}.yml",
+    ],
+)
 def test_config_path_names_only_the_stage(repo, path):
     (repo / "lambda-validation.toml").write_text(
         ADAPTER + f'[build]\nstages = ["dev"]\nconfig_path = "{path}"\nconfig_text = "x"\n'
@@ -806,3 +823,57 @@ def test_test_only_negative_prefers_a_non_native_root(tmp_path, repo, good_zip):
     )
     results = negatives.run(good_zip, Adapter(repo / "lambda-validation.toml"), tmp_path / "neg")
     assert results["test-only-leak-pytest"]["code"] == "TEST_ONLY_LEAK"
+
+
+@pytest.mark.parametrize(
+    "member",
+    ["Stray-1.0.DIST-INFO/METADATA", "Helper-2.1.0.Dist-Info/METADATA", "stray.EGG-INFO/PKG-INFO"],
+)
+def test_metadata_suffixes_are_matched_regardless_of_case(tmp_path, adapter, member):
+    # importlib.metadata in the image counts these as distributions, so the host may not skip them.
+    data = metadata("stray", "1.0") if member.endswith("METADATA") else b""
+    assert code_of(artifact.check, mutate(tmp_path, {member: data}), adapter) == "METADATA_INVALID"
+
+
+@pytest.mark.parametrize("field", ["platform_release", "platform_version"])
+def test_a_marker_on_a_host_only_field_is_refused(tmp_path, repo, field):
+    # The target description cannot supply these; the check host's own value would decide.
+    adapter = _roots_only(repo, "app-lib>=1\nboto3>=1.34\n")
+    members = base_members()
+    members["app_lib-1.0.0.dist-info/METADATA"] = metadata(
+        "app-lib", "1.0.0", ["helper>=2,<3", f"x>=1; {field} >= '5'"]
+    )
+    assert code_of(artifact.check, write_zip(tmp_path / "m.zip", members), adapter) == "MARKER_UNSUPPORTED"
+    adapter = _roots_only(repo, f"app-lib>=1\nboto3>=1.34\nx>=1; {field} == 'y'\n")
+    assert code_of(artifact.check, write_zip(tmp_path / "r.zip", base_members()), adapter) == "MARKER_UNSUPPORTED"
+
+
+def test_extract_refuses_a_directory_entry_beside_a_file(tmp_path):
+    members = dict(base_members(), **{"pkg": b"", "pkg/": b""})
+    assert code_of(extract, write_zip(tmp_path / "clash.zip", members), tmp_path / "out") == "UNSAFE_MEMBER"
+
+
+def test_root_suffixes_apply_to_top_level_files_only(tmp_path, adapter):
+    artifact.check(mutate(tmp_path, {"pkg/README.md": b""}), adapter)
+    assert code_of(artifact.check, mutate(tmp_path, {"README.md": b""}), adapter) == "FORBIDDEN_PATH"
+
+
+def test_target_python_is_major_dot_minor(repo):
+    path = repo / "lambda-validation.toml"
+    path.write_text(ADAPTER.replace('python = "3.12"', 'python = "3"'))
+    assert code_of(Adapter, path) == "ADAPTER_CONFIG"
+
+
+@pytest.mark.parametrize("python, full", [("3.13", "3.13.18"), ("3.14", "3.14.10")])
+def test_newer_targets_derive_their_own_tag(tmp_path, repo, python, full):
+    tag = python.replace(".", "")
+    path = repo / "lambda-validation.toml"
+    path.write_text(ADAPTER.replace('python = "3.12"', f'python = "{python}"').replace("3.12.16", full))
+    adapter = Adapter(path)
+    own = {k.replace("cpython-312", f"cpython-{tag}"): v for k, v in base_members().items()}
+    artifact.check(write_zip(tmp_path / "own.zip", own), adapter)
+    for other in ("312", "311", "315"):
+        name = f"other.cpython-{other}-x86_64-linux-gnu.so"
+        assert code_of(artifact.check, write_zip(tmp_path / f"{other}.zip", dict(own, **{name: elf()})), adapter) == (
+            "NATIVE_ABI"
+        )
