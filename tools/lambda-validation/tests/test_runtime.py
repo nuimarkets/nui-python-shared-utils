@@ -137,14 +137,18 @@ def test_network_guard_probe_accepts_only_its_own_refusal(tmp_path, error, expec
 
 
 def _loadable_shared_object():
-    """A real shared object this interpreter can load: one of its own extension modules."""
-    import importlib
+    """A real shared object this interpreter can load: one of its own extension modules, or the
+    system zlib when the interpreter has them compiled in."""
+    import sysconfig
 
-    for name in ("_ctypes", "_json", "_socket", "_struct", "math"):
-        found = getattr(importlib.import_module(name), "__file__", None)
-        if found and found.endswith(".so"):
-            return Path(found)
-    raise AssertionError("no extension module file to load")
+    dynload = Path(sysconfig.get_path("stdlib")) / "lib-dynload"
+    candidates = sorted(dynload.glob("*.so")) + [
+        Path(f"/{lib}/{arch}-linux-gnu/libz.so.1") for lib in ("lib", "usr/lib") for arch in ("x86_64", "aarch64")
+    ]
+    for path in candidates:
+        if path.is_file():
+            return path
+    raise AssertionError("no shared object to load")
 
 
 def test_declared_plain_library_loads_from_the_artifact(tmp_path):
