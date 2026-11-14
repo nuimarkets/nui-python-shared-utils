@@ -119,16 +119,13 @@ class PluginPolicy:
         print(f"OFFLINE_GUARD: plugins loaded outside [offline] plugins: {sorted(self.loaded)}", file=sys.stderr)
 
     def active(self, manager):
-        """Installed plugins pytest holds now: under the entry point's name, or as the very object
-        the entry point names (a module that ``pytest_plugins`` or an import registered under its
-        own name). A blocked name (`-p no:NAME` after the runner's own `-p NAME`) maps to None, so
-        it is not active, and a registered module does not stand in for an object inside it."""
+        """Installed plugins pytest holds now, each as the very object its entry point names,
+        whatever name it is registered under (`-p NAME` registers it under the entry point's name;
+        ``pytest_plugins`` or an import registers a module under its own). Not by name: a blocked
+        name (`-p no:NAME`) holds nothing, and another object registered under a declared plugin's
+        name, or a module standing in for an object inside it, is not that plugin."""
         held = [plugin for _, plugin in manager.list_name_plugin() if plugin is not None]
-        return sorted(
-            name
-            for name, entry in self.points.items()
-            if manager.get_plugin(name) is not None or any(plugin is target(entry) for plugin in held)
-        )
+        return sorted(name for name, entry in self.points.items() if any(plugin is target(entry) for plugin in held))
 
     def pytest_collection_finish(self, session):
         # Before any test runs: everything arguments, ini addopts, configuration and collection

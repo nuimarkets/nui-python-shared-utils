@@ -171,8 +171,8 @@ installed plugin the list does not name that registers at any point, however it 
 the list names must load: the runner reads which plugins pytest holds after configuration and
 collection, before any test runs, prints them as `LOADED`, and stops the run (exit 3) if a
 listed one is missing, whether a `-p no:NAME` in the arguments or a `conftest.py` blocked it.
-A plugin counts as held under its entry point's name, or as the very object the entry point
-names, so a registered module does not stand in for an object inside it. It is one reading,
+A plugin counts as held only as the very object its entry point names, so neither another
+object registered under its name nor a registered module stands in for an object inside it. It is one reading,
 before the first test: test-time code that unregisters a plugin is not caught.
 A `-p no:NAME` in ini `addopts` cannot disable one, since pytest reads addopts before the
 runner's own `-p NAME`. `xdist` is refused,
