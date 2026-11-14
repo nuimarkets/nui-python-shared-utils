@@ -88,11 +88,13 @@ def stubs(tmp_path, monkeypatch):
 
     def ensure(image, machine):
         calls["ensure"].append((image, machine, len(calls["digests"])))
-        return image
+        return image_id(image)
 
-    def digests(image):
-        calls["digests"].append(image)
-        return [f"{image}@sha256:{'0' * 64}"]
+    def digests(reference):
+        # RepoDigests name the repository, whichever reference (tag or ID) is inspected.
+        calls["digests"].append(reference)
+        names = {image_id(name): name for name, _, _ in calls["ensure"]}
+        return [f"{names.get(reference, reference)}@sha256:{'0' * 64}"]
 
     def run(command, log):
         index = len(calls["run"])
@@ -110,6 +112,11 @@ def stubs(tmp_path, monkeypatch):
     return calls
 
 
+def image_id(name):
+    """A stand-in local image ID, distinct per image name."""
+    return "sha256:" + format(sum(map(ord, name)), "064x")
+
+
 def code_of(call, *args):
     with pytest.raises(ValidationError) as caught:
         call(*args)
@@ -123,6 +130,15 @@ def test_verify_runs_every_stage_and_records_both_images(tmp_path, project, stub
         "example.invalid/build-python3.12:x86_64": [f"example.invalid/build-python3.12:x86_64@sha256:{'0' * 64}"]
     }
     assert manifest["image_digests"] and "negatives" in manifest["artifacts"][0]
+    # Provenance names the checked image itself: its ID, its platform, and digests read by that ID.
+    runtime, builder = "example.invalid/lambda-python:3.12", "example.invalid/build-python3.12:x86_64"
+    assert manifest["image_id"] == image_id(runtime) and manifest["image_platform"] == "linux/amd64"
+    assert manifest["build_image_ids"] == {builder: image_id(builder)}
+    assert stubs["digests"] == [image_id(runtime), image_id(builder)]
+    # Every container run executes that ID, never the mutable tag, and never pulls.
+    for command in stubs["run"]:
+        assert image_id(runtime) in command and runtime not in command
+        assert command[command.index("--pull") + 1] == "never"
     # Both images are pulled when missing, for the target platform, before any digest is read.
     assert stubs["ensure"] == [
         ("example.invalid/lambda-python:3.12", "x86_64", 0),
@@ -377,44 +393,146 @@ def test_verify_binds_the_tool_to_the_committed_pin(tmp_path, project, stubs):
     assert stubs["package"] == []
 
 
+class FakeDocker:
+    """``docker image inspect`` and ``docker pull`` over an image store held in memory, shaped
+    like the containerd store: a tag names one ID, and one ID may hold several platforms.
+    ``registry`` is what a pull of each tag would fetch for a requested platform."""
+
+    def __init__(self, store=None, registry=None, inspect_error=None, platform_error=None, pull_error=None):
+        self.tags = dict(store or {})  # tag -> (id, platforms)
+        self.registry = registry or {}  # tag -> {platform: (id, platforms)}
+        self.inspect_error, self.platform_error, self.pull_error = inspect_error, platform_error, pull_error
+        self.commands = []
+
+    def _by_reference(self, reference):
+        for image_id, platforms in self.tags.values():
+            if reference == image_id:
+                return image_id, platforms
+        return self.tags.get(reference)
+
+    def __call__(self, command, **kwargs):
+        self.commands.append(command)
+        if command[1:3] == ["image", "inspect"]:
+            platform = command[4] if command[3] == "--platform" else None
+            error = self.platform_error if platform else self.inspect_error
+            if error:
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr=error)
+            found = self._by_reference(command[-1])
+            if found is None:
+                stderr = f"Error response from daemon: No such image: {command[-1]}"
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr=stderr)
+            image_id, platforms = found
+            if platform is None:
+                platform = platforms[0]
+            elif platform not in platforms:
+                stderr = (
+                    f"Error response from daemon: image with reference {command[-1]} was found"
+                    f" but does not provide the specified platform ({platform})"
+                )
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr=stderr)
+            system, architecture = platform.split("/")
+            record = [{"Id": image_id, "Os": system, "Architecture": architecture, "RepoDigests": []}]
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(record), stderr="")
+        if command[1] == "pull":
+            assert command[2] == "--platform"
+            fetched = self.registry.get(command[-1], {}).get(command[3])
+            if self.pull_error or fetched is None:
+                stderr = self.pull_error or "manifest unknown"
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr=stderr)
+            self.tags[command[-1]] = fetched
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        raise AssertionError(f"unexpected docker call {command}")
+
+    def pulls(self):
+        return [command for command in self.commands if command[1] == "pull"]
+
+
+AMD = "sha256:" + "a" * 64
+ARM = "sha256:" + "b" * 64
+BOTH = "sha256:" + "c" * 64
+
+
 @pytest.mark.parametrize("machine, platform", [("x86_64", "linux/amd64"), ("aarch64", "linux/arm64")])
-def test_ensure_image_pulls_only_when_missing(monkeypatch, machine, platform):
-    commands = []
+def test_ensure_image_runs_a_cached_image_that_provides_the_target_by_its_id(monkeypatch, machine, platform):
+    # One ID holding both platforms, as the containerd store keeps a multi-platform pull.
+    docker = FakeDocker({"img:1": (BOTH, ["linux/amd64", "linux/arm64"])})
+    monkeypatch.setattr(container.subprocess, "run", docker)
+    assert container.ensure_image("img:1", machine) == BOTH
+    # The platform is checked on the ID read first, not on the tag, so a tag moved meanwhile
+    # cannot put another image between the check and the run.
+    assert docker.commands == [
+        ["docker", "image", "inspect", "img:1"],
+        ["docker", "image", "inspect", "--platform", platform, BOTH],
+    ]
 
-    def docker(present, pulls, present_error="Error response from daemon: No such image: img:1"):
-        def run(command, **kwargs):
-            commands.append(command)
-            if command[1:3] == ["image", "inspect"]:
-                return subprocess.CompletedProcess(command, 0 if present else 1, stdout="", stderr=present_error)
-            return subprocess.CompletedProcess(command, 0 if pulls else 1, stdout="", stderr="denied: pull access")
 
-        return run
+@pytest.mark.parametrize(
+    "machine, platform, cached, wanted",
+    [("x86_64", "linux/amd64", (ARM, ["linux/arm64"]), AMD), ("aarch64", "linux/arm64", (AMD, ["linux/amd64"]), ARM)],
+)
+def test_a_cached_image_of_another_platform_is_pulled_for_the_target(monkeypatch, machine, platform, cached, wanted):
+    registry = {"img:1": {platform: (wanted, [platform])}}
+    docker = FakeDocker({"img:1": cached}, registry)
+    monkeypatch.setattr(container.subprocess, "run", docker)
+    assert container.ensure_image("img:1", machine) == wanted
+    assert docker.pulls() == [["docker", "pull", "--platform", platform, "img:1"]]
+    # The ID it returns, and the digests read through it, are the pulled image's.
+    assert docker.commands[-1] == ["docker", "image", "inspect", "--platform", platform, wanted]
 
-    monkeypatch.setattr(container.subprocess, "run", docker(present=True, pulls=False))
-    assert container.ensure_image("img:1", machine) == "img:1"
-    assert commands == [["docker", "image", "inspect", "img:1"]]
-    commands.clear()
-    monkeypatch.setattr(container.subprocess, "run", docker(present=False, pulls=True))
-    container.ensure_image("img:1", machine)
-    assert commands[1] == ["docker", "pull", "--platform", platform, "img:1"]
-    monkeypatch.setattr(container.subprocess, "run", docker(present=False, pulls=False))
+
+def test_a_cached_image_that_misreports_its_platform_is_not_accepted(monkeypatch):
+    # A daemon that answers a platform inspect with a record of another platform.
+    docker = FakeDocker({"img:1": (ARM, ["linux/arm64"])})
+
+    def ignores_platform(command, **kwargs):
+        if command[3:4] == ["--platform"]:
+            command = command[:3] + command[5:]
+        return docker(command, **kwargs)
+
+    monkeypatch.setattr(container.subprocess, "run", ignores_platform)
     with pytest.raises(ValidationError) as caught:
-        container.ensure_image("img:1", machine)
+        container.ensure_image("img:1", "x86_64")
+    assert caught.value.code == "BUILD" and "manifest unknown" in caught.value.detail
+
+
+@pytest.mark.parametrize("cached", [None, (ARM, ["linux/arm64"])])
+def test_a_pull_that_still_lacks_the_target_platform_fails(monkeypatch, cached):
+    # The pull succeeds but the tag still names an image without linux/amd64.
+    docker = FakeDocker({"img:1": cached} if cached else {}, {"img:1": {"linux/amd64": (ARM, ["linux/arm64"])}})
+    monkeypatch.setattr(container.subprocess, "run", docker)
+    with pytest.raises(ValidationError) as caught:
+        container.ensure_image("img:1", "x86_64")
+    assert caught.value.code == "BUILD" and "does not provide linux/amd64 after a pull" in caught.value.detail
+    assert len(docker.pulls()) == 1
+
+
+def test_ensure_image_pulls_a_missing_image_and_reports_a_failed_pull(monkeypatch):
+    docker = FakeDocker({}, {"img:1": {"linux/amd64": (AMD, ["linux/amd64"])}})
+    monkeypatch.setattr(container.subprocess, "run", docker)
+    assert container.ensure_image("img:1", "x86_64") == AMD
+    assert docker.pulls() == [["docker", "pull", "--platform", "linux/amd64", "img:1"]]
+    docker = FakeDocker({}, {"img:1": {"linux/amd64": (AMD, ["linux/amd64"])}}, pull_error="denied: pull access")
+    monkeypatch.setattr(container.subprocess, "run", docker)
+    with pytest.raises(ValidationError) as caught:
+        container.ensure_image("img:1", "x86_64")
     assert caught.value.code == "BUILD" and "denied: pull access" in caught.value.detail
 
 
-def test_ensure_image_does_not_pull_over_an_inspect_error(monkeypatch):
-    commands = []
-
-    def run(command, **kwargs):
-        commands.append(command)
-        return subprocess.CompletedProcess(command, 1, stdout="", stderr="permission denied while trying to connect")
-
-    monkeypatch.setattr(container.subprocess, "run", run)
+@pytest.mark.parametrize(
+    "errors",
+    [
+        {"inspect_error": "permission denied while trying to connect"},
+        # A docker whose image inspect has no --platform is an error, not an absent image.
+        {"platform_error": "unknown flag: --platform"},
+    ],
+)
+def test_ensure_image_does_not_pull_over_an_inspect_error(monkeypatch, errors):
+    docker = FakeDocker({"img:1": (AMD, ["linux/amd64"])}, **errors)
+    monkeypatch.setattr(container.subprocess, "run", docker)
     with pytest.raises(ValidationError) as caught:
         container.ensure_image("img:1", "x86_64")
-    assert caught.value.code == "BUILD" and "permission denied" in caught.value.detail
-    assert all(command[1] != "pull" for command in commands)
+    assert caught.value.code == "BUILD" and next(iter(errors.values())) in caught.value.detail
+    assert docker.pulls() == []
 
 
 def test_verify_runs_only_the_named_stage_and_copies_its_template(tmp_path, project, stubs):

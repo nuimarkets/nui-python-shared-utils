@@ -30,6 +30,9 @@ def argv(image, extracted, machine, env=None, script=None, args=(), proof=None, 
         "docker",
         "run",
         "--rm",
+        # Never pull here: the image is the local one ensure_image checked and recorded.
+        "--pull",
+        "never",
         "--platform",
         PLATFORM[machine],
         "--network",
@@ -67,22 +70,55 @@ def run(command, log):
 
 
 def ensure_image(image, machine):
-    """Pull ``image`` for the target platform when the host does not have it, so a cold host
-    builds the same as a warm one and consumers carry no pull step of their own."""
-    inspect = subprocess.run(["docker", "image", "inspect", image], capture_output=True, text=True)
-    if inspect.returncode == 0:
-        return image
-    # Pull only on a confirmed absence: a daemon or permission error is not a missing image.
-    if not re.search(r"No such (image|object)", inspect.stderr):
-        fail("BUILD", f"cannot inspect image {image}: {inspect.stderr.strip()[:300]}")
-    result = subprocess.run(["docker", "pull", "--platform", PLATFORM[machine], image], capture_output=True, text=True)
-    if result.returncode != 0:
-        fail("BUILD", f"cannot pull image {image}: {result.stderr.strip()[:300]}")
-    return image
+    """The local image ID to run ``image`` by, pulled for the target platform when the host
+    does not have it, so a cold host builds the same as a warm one and consumers carry no pull
+    step of their own. A cached image that does not provide the target platform counts as
+    absent. The ID is read before the platform check, and the check reads that ID rather than
+    the tag, so the runs (``argv`` with ``--pull never``) execute the image that was checked
+    and whose digests are recorded, even if the tag moves meanwhile."""
+    reference = _local_id(image)
+    if reference is None or not _provides(reference, machine):
+        result = subprocess.run(
+            ["docker", "pull", "--platform", PLATFORM[machine], image], capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            fail("BUILD", f"cannot pull image {image}: {result.stderr.strip()[:300]}")
+        reference = _local_id(image)
+        if reference is None or not _provides(reference, machine):
+            fail("BUILD", f"image {image} does not provide {PLATFORM[machine]} after a pull for it")
+    return reference
+
+
+# A confirmed absence, or an image that does not hold the requested platform. Anything else
+# (a daemon or permission error, a docker without `image inspect --platform`) is not.
+ABSENT = re.compile(r"No such (image|object)|specified platform")
+
+
+def _inspect(*args):
+    """The inspected record, or None on a confirmed absence."""
+    result = subprocess.run(["docker", "image", "inspect", *args], capture_output=True, text=True)
+    if result.returncode == 0:
+        return json.loads(result.stdout)[0]
+    if not ABSENT.search(result.stderr):
+        fail("BUILD", f"cannot inspect image {args[-1]}: {result.stderr.strip()[:300]}")
+    return None
+
+
+def _local_id(image):
+    found = _inspect(image)
+    return None if found is None else found["Id"]
+
+
+def _provides(reference, machine):
+    """Whether the local image ``reference`` holds the target platform. Under the containerd
+    image store one ID can hold several platforms, so the check asks for the platform rather
+    than reading the image's default one."""
+    found = _inspect("--platform", PLATFORM[machine], reference)
+    return found is not None and f"{found.get('Os')}/{found.get('Architecture')}" == PLATFORM[machine]
 
 
 def image_digests(image):
-    """Repository digests of a local image. An image that cannot be inspected, or has no
+    """Repository digests of a local image, by tag or by ID. An image that cannot be inspected, or has no
     digest to record, fails rather than leaving the manifest without its provenance."""
     result = subprocess.run(["docker", "image", "inspect", image], capture_output=True, text=True)
     if result.returncode != 0:
