@@ -398,8 +398,11 @@ class FakeDocker:
     like the containerd store: a tag names one ID, and one ID may hold several platforms.
     ``registry`` is what a pull of each tag would fetch for a requested platform."""
 
-    def __init__(self, store=None, registry=None, inspect_error=None, platform_error=None, pull_error=None):
+    def __init__(
+        self, store=None, registry=None, inspect_error=None, platform_error=None, pull_error=None, unpulled=()
+    ):
         self.tags = dict(store or {})  # tag -> (id, platforms)
+        self.unpulled = set(unpulled)  # (id, platform) listed in the index, content never pulled
         self.registry = registry or {}  # tag -> {platform: (id, platforms)}
         self.inspect_error, self.platform_error, self.pull_error = inspect_error, platform_error, pull_error
         self.commands = []
@@ -431,6 +434,10 @@ class FakeDocker:
                 )
                 return subprocess.CompletedProcess(command, 1, stdout="", stderr=stderr)
             system, architecture = platform.split("/")
+            if (image_id, platform) in self.unpulled:
+                # A platform listed in the local index whose content was never pulled: the
+                # containerd store answers rc 0 with an empty platform, not an error.
+                system = architecture = ""
             record = [{"Id": image_id, "Os": system, "Architecture": architecture, "RepoDigests": []}]
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps(record), stderr="")
         if command[1] == "pull":
@@ -478,6 +485,15 @@ def test_a_cached_image_of_another_platform_is_pulled_for_the_target(monkeypatch
     assert docker.pulls() == [["docker", "pull", "--platform", platform, "img:1"]]
     # The ID it returns, and the digests read through it, are the pulled image's.
     assert docker.commands[-1] == ["docker", "image", "inspect", "--platform", platform, wanted]
+
+
+def test_a_listed_but_unpulled_platform_is_pulled(monkeypatch):
+    # The index names linux/amd64 but holds no content for it; the pull fetches it.
+    registry = {"img:1": {"linux/amd64": (AMD, ["linux/amd64"])}}
+    docker = FakeDocker({"img:1": (BOTH, ["linux/arm64", "linux/amd64"])}, registry, unpulled={(BOTH, "linux/amd64")})
+    monkeypatch.setattr(container.subprocess, "run", docker)
+    assert container.ensure_image("img:1", "x86_64") == AMD
+    assert docker.pulls() == [["docker", "pull", "--platform", "linux/amd64", "img:1"]]
 
 
 def test_a_cached_image_that_misreports_its_platform_is_not_accepted(monkeypatch):

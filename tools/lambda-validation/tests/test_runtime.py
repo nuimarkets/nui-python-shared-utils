@@ -196,6 +196,18 @@ def image():
     return IMAGE
 
 
+def test_ensure_image_runs_by_the_checked_id_on_a_real_daemon(tmp_path, image):
+    # The fakes model one image store; this is the daemon the suite runs against.
+    reference = container.ensure_image(image, "x86_64")
+    assert reference.startswith("sha256:")
+    assert container.image_digests(reference)
+    log = tmp_path / "run.log"
+    probe = ("-c", "import platform; print(platform.machine())")
+    command = container.argv(reference, fake_root(tmp_path / "task"), "x86_64", args=probe)
+    assert container.run(command, log) == 0, log.read_text()
+    assert log.read_text().split() == ["x86_64"]
+
+
 SMOKE = """
 import sys
 sys.path.insert(0, "/var/task")
