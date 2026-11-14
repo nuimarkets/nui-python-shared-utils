@@ -148,17 +148,22 @@ class PluginPolicy:
         # registered or blocked. LOADED is read here, from pytest, not from the policy. Called
         # from a `pytest_runtestloop` wrapper in main, so a conftest's own first-result loop
         # cannot run the tests without it.
+        self.require(session.config.pluginmanager, report=True)
+        self.refuse_loaded()
+
+    def refuse_loaded(self):
+        """Stop the run (exit 3) once a plugin outside the policy has registered; main reports it."""
         import pytest
 
-        self.require(session.config.pluginmanager, report=True)
         if self.loaded:
-            self.report()
             pytest.exit("plugins loaded outside the policy", returncode=3)
 
     def pytest_runtest_call(self, item):
-        # Again before each test body, after its setup: a declared plugin removed during an earlier
-        # test, or by this test's fixtures, stops the run before the body runs.
+        # Again before each test body, after its setup, the whole policy: a declared plugin removed,
+        # or another plugin registered, during an earlier test, by this test's fixtures, or before a
+        # run-loop wrapper outside this runner's ran the tests, stops the run before the body runs.
         self.require(item.config.pluginmanager)
+        self.refuse_loaded()
 
 
 def main():
@@ -288,8 +293,9 @@ def main():
         # Whatever status pytest settled on: another hook may have replaced the exit code.
         print(f"OFFLINE_GUARD: plugins in [offline] plugins not loaded: {plugins.missing}", file=sys.stderr)
         status = 3
-    if plugins.loaded and status != 3:
-        # Registered while tests ran, after the collection check.
+    if plugins.loaded:
+        # Reported here, after pytest returns: a refusal inside a test's call phase runs under
+        # pytest's output capture, and another hook may have replaced the exit code.
         plugins.report()
         status = 3
     # The launcher trusts a 0 only beside this record, so a run that never reached here

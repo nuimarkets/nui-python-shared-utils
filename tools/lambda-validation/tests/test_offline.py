@@ -300,6 +300,13 @@ def fake_plugin(tmp_path):
 CONFTEST_ROUTE = "pytest_plugins = ['fakeplug']\n\ndef pytest_runtest_call(item):\n    open(MARKER, 'w').close()\n"
 MODULE_ROUTE = "pytest_plugins = ['fakeplug']\n\ndef test_x():\n    open(MARKER, 'w').close()\n"
 LATE_ROUTE = "def test_late(request):\n    request.config.pluginmanager.import_plugin('fakeplug')\n"
+# A conftest run-loop wrapper, outside this runner's, that runs the tests before its yield.
+OUTER_LOOP_WRAPPER = (
+    "\nimport pytest\n\n\n@pytest.hookimpl(hookwrapper=True)\ndef pytest_runtestloop(session):\n"
+    "    for item in session.items:\n"
+    "        item.config.hook.pytest_runtest_protocol(item=item, nextitem=None)\n"
+    "    yield\n"
+)
 # A conftest's own first-result run loop, which runs the tests itself and skips the ordinary loops.
 CUSTOM_LOOP = (
     "\nimport pytest\n\n\n@pytest.hookimpl(tryfirst=True)\ndef pytest_runtestloop(session):\n"
@@ -319,6 +326,8 @@ CUSTOM_LOOP = (
         ([], None, MODULE_ROUTE, "outside [offline] plugins: ['fakeplug_ep']", "['fakeplug_ep']"),
         ([], None, LATE_ROUTE, "outside [offline] plugins: ['fakeplug_ep']", "[]"),
         ([], CONFTEST_ROUTE + CUSTOM_LOOP, None, "outside [offline] plugins: ['fakeplug_ep']", "['fakeplug_ep']"),
+        # Registered during collection, then run by a wrapper before this runner's loop check.
+        ([], OUTER_LOOP_WRAPPER, MODULE_ROUTE, "outside [offline] plugins: ['fakeplug_ep']", None),
     ],
 )
 def test_a_plugin_declared_not_loaded_cannot_load_another_way(
