@@ -72,7 +72,8 @@ def plugin_inventory(policy):
         print(f"OFFLINE_GUARD: pytest plugins unlisted={unlisted} listed-but-absent={absent}", file=sys.stderr)
         raise SystemExit(3)
     # Plugins load only through the policy list: a `-p NAME` in the arguments would load one
-    # the adapter declared not loaded. `-p no:NAME` disables, so it stays allowed.
+    # the adapter declared not loaded. `-p no:NAME` disables, so it stays allowed here; one that
+    # disables a declared plugin is caught after configuration (PluginPolicy).
     args = policy["args"]
     for index, arg in enumerate(args):
         value = args[index + 1] if arg == "-p" and index + 1 < len(args) else arg[2:] if arg.startswith("-p") else None
@@ -80,6 +81,15 @@ def plugin_inventory(policy):
             print(f"OFFLINE_GUARD: load plugins through [offline] plugins, not {arg} in the arguments", file=sys.stderr)
             raise SystemExit(3)
     return installed
+
+
+def target(entry):
+    """The object an entry point names, if its module is already imported. Nothing is imported
+    here: a module that was never imported holds no registered plugin."""
+    found = sys.modules.get(entry.module)
+    for part in (entry.attr or "").split(".") if entry.attr else ():
+        found = getattr(found, part, None)
+    return found if found is not None else object()
 
 
 class PluginPolicy:
@@ -90,10 +100,14 @@ class PluginPolicy:
     def __init__(self, policy):
         from importlib.metadata import entry_points
 
-        self.forbidden = {
-            entry.name: entry.module for entry in entry_points(group="pytest11") if entry.name not in policy["plugins"]
-        }
+        self.points = {entry.name: entry for entry in entry_points(group="pytest11")}
+        self.entries = {name: entry.module for name, entry in self.points.items()}
+        self.declared = list(policy["plugins"])
+        self.forbidden = {name: module for name, module in self.entries.items() if name not in self.declared}
         self.loaded = []
+        # Declared plugins found missing; reported by main once pytest returns, since a check
+        # inside a test's call phase runs under pytest's output capture.
+        self.missing = []
 
     # No `plugin_name` argument: pytest 7's hookspec lacks it, and pluggy refuses a hookimpl
     # that asks for one, so the name comes from the manager.
@@ -107,13 +121,49 @@ class PluginPolicy:
     def report(self):
         print(f"OFFLINE_GUARD: plugins loaded outside [offline] plugins: {sorted(self.loaded)}", file=sys.stderr)
 
-    def pytest_collection_finish(self, session):
-        # Before any test runs: everything configuration and collection registered.
-        if self.loaded:
-            import pytest
+    def active(self, manager):
+        """Installed plugins pytest holds now, each as the very object its entry point names,
+        whatever name it is registered under (`-p NAME` registers it under the entry point's name;
+        ``pytest_plugins`` or an import registers a module under its own). Not by name: a blocked
+        name (`-p no:NAME`) holds nothing, and another object registered under a declared plugin's
+        name, or a module standing in for an object inside it, is not that plugin."""
+        held = [plugin for _, plugin in manager.list_name_plugin() if plugin is not None]
+        return sorted(name for name, entry in self.points.items() if any(plugin is target(entry) for plugin in held))
 
-            self.report()
+    def require(self, manager, report=False):
+        """Stop the run (exit 3) when a declared plugin is not held; ``report`` prints LOADED."""
+        import pytest
+
+        active = self.active(manager)
+        if report:
+            print("LOADED", active, flush=True)
+        inactive = [name for name in self.declared if name not in active]
+        if inactive:
+            self.missing = inactive
+            pytest.exit("declared plugins not loaded", returncode=3)
+
+    def before_tests(self, session):
+        # Once collection is over, a collection-finish wrapper's code after its yield included, and
+        # before any test runs: everything arguments, ini addopts, configuration and collection
+        # registered or blocked. LOADED is read here, from pytest, not from the policy. Called
+        # from a `pytest_runtestloop` wrapper in main, so a conftest's own first-result loop
+        # cannot run the tests without it.
+        self.require(session.config.pluginmanager, report=True)
+        self.refuse_loaded()
+
+    def refuse_loaded(self):
+        """Stop the run (exit 3) once a plugin outside the policy has registered; main reports it."""
+        import pytest
+
+        if self.loaded:
             pytest.exit("plugins loaded outside the policy", returncode=3)
+
+    def pytest_runtest_call(self, item):
+        # Again before each test body, after its setup, the whole policy: a declared plugin removed,
+        # or another plugin registered, during an earlier test, by this test's fixtures, or before a
+        # run-loop wrapper outside this runner's ran the tests, stops the run before the body runs.
+        self.require(item.config.pluginmanager)
+        self.refuse_loaded()
 
 
 def main():
@@ -133,7 +183,7 @@ def main():
         policy["root"],
         "INSTALLED_PLUGINS",
         plugins,
-        "LOADED",
+        "DECLARED",
         policy["plugins"],
         flush=True,
     )
@@ -228,9 +278,24 @@ def main():
         arguments += ["-p", plugin]
     skips = SkipPolicy()
     plugins = PluginPolicy(policy)
-    status = int(pytest.main(arguments + policy["args"], plugins=[skips, plugins]))
-    if plugins.loaded and status != 3:
-        # Registered while tests ran, after the collection check.
+
+    class BeforeTests:
+        # A wrapper runs before every `pytest_runtestloop` implementation, pytest's own and a
+        # conftest's first-result loop alike, so the plugin check comes before any test whoever
+        # runs them.
+        @pytest.hookimpl(hookwrapper=True)
+        def pytest_runtestloop(self, session):
+            plugins.before_tests(session)
+            yield
+
+    status = int(pytest.main(arguments + policy["args"], plugins=[skips, plugins, BeforeTests()]))
+    if plugins.missing:
+        # Whatever status pytest settled on: another hook may have replaced the exit code.
+        print(f"OFFLINE_GUARD: plugins in [offline] plugins not loaded: {plugins.missing}", file=sys.stderr)
+        status = 3
+    if plugins.loaded:
+        # Reported here, after pytest returns: a refusal inside a test's call phase runs under
+        # pytest's output capture, and another hook may have replaced the exit code.
         plugins.report()
         status = 3
     # The launcher trusts a 0 only beside this record, so a run that never reached here

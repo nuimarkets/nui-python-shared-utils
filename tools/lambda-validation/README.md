@@ -47,7 +47,7 @@ in-container check's own code in its detail.
 
 | Command | What it does |
 | --- | --- |
-| `verify --config lambda-validation.toml --output DIR` | Fails `SELF_CHECK` unless the running tool is the commit the committed `requirements-validation.txt` pins. Pulls the runtime image and every `build_images` entry that is not on the host (`--platform` from `[target] machine`; a failed pull is `BUILD`), so a consumer needs no pull step of its own. Builds every stage from `git archive HEAD` with synthetic configuration, then per stage: secret scan, `check-zip`, extraction proof, a check that the image runs the `[target]` Python, the adapter's smoke script in the Lambda image, and `pip check` in the image over the artifact together with the image's own packages, as Lambda resolves them (`/var/task` first on `PYTHONPATH`, since `python -m pip` drops the working directory from `sys.path`; the artifact-only closure is the host check and `runtime.check_inventory`); the first stage also runs `negatives`. Each stage's package is written to `.serverless-validation-<stage>/` inside the build tree, so the repository's package patterns must exclude `.serverless-*/**`. `[container.env]` may not set a variable the container command sets itself. The adapter, its lock files and its smoke script are read from the committed tree, never the working copy, and the adapter must sit at the repository's top level. Records the digests of the runtime image and of every `build_images` entry. Copies each compiled template out for the repository's own assertions. `DIR` must be new and outside the checkout |
+| `verify --config lambda-validation.toml --output DIR` | Fails `SELF_CHECK` unless the running tool is the commit the committed `requirements-validation.txt` pins. Pulls the runtime image and every `build_images` entry that is not on the host for the target platform (`--platform` from `[target] machine`): a cached image that does not provide that platform counts as missing, and a failed pull, or a pull that still lacks the platform, is `BUILD`. So a consumer needs no pull step of its own. The platform check needs a Docker whose `image inspect` takes `--platform`; one without it fails `BUILD` rather than skipping the check. Builds every stage from `git archive HEAD` with synthetic configuration, then per stage: secret scan, `check-zip`, extraction proof, a check that the image runs the `[target]` Python, the adapter's smoke script in the Lambda image, and `pip check` in the image over the artifact together with the image's own packages, as Lambda resolves them (`/var/task` first on `PYTHONPATH`, since `python -m pip` drops the working directory from `sys.path`; the artifact-only closure is the host check and `runtime.check_inventory`); the first stage also runs `negatives`. Each stage's package is written to `.serverless-validation-<stage>/` inside the build tree, so the repository's package patterns must exclude `.serverless-*/**`. `[container.env]` may not set a variable the container command sets itself. The adapter, its lock files and its smoke script are read from the committed tree, never the working copy, and the adapter must sit at the repository's top level. Records the runtime image's local ID (`image_id`, which under Docker's containerd image store can be a multi-platform index), its platform (`image_platform`), the ID of that platform's image inside it (`image_platform_id`, the image the steps execute) and its repository digests, and the ID (`build_image_ids`) and digests of every `build_images` entry. Every container step runs the recorded `image_id` with `--pull never`, never the tag, so what is recorded is what ran. The build runs `build_images` by the tag the repository's own packaging configuration names, which this tool does not control. Copies each compiled template out for the repository's own assertions. `DIR` must be new and outside the checkout |
 | `check-zip ZIP --config ...` | Member safety, secrets, exclusions, required paths, size, native ABI/ELF, dependency pins and closure, test-only leaks, optional major drift. Every member is read, so a corrupt one fails `UNREADABLE_ZIP` wherever it is, as does a member compressed with anything but stored or deflated (the verdict on bzip2, LZMA or zstd would depend on the Python running the check). Member names must be canonical (`./a.py`, `pkg//a.py` fail `UNSAFE_MEMBER`). A CPython extension must be named `.cpython-XY-<machine>-linux-gnu.so` or `.abi3.so` for the `[target]` (`NATIVE_ABI`). Distribution metadata is read from top-level `*.dist-info/METADATA` only, and a `*.dist-info` or `*.egg-info` directory at any lower depth, or a top-level one in any other case (`.DIST-INFO`), fails `METADATA_INVALID`. A requirement marker on `platform_release` or `platform_version` fails `MARKER_UNSUPPORTED`: only the check host could answer it, not the target. A `.serverless-validation-<stage>` directory is `TOOL_IN_ARTIFACT` |
 | `negatives ZIP --config ... --output DIR` | Mutates the ZIP once per standard defect and once per configured exclusion rule; fails unless each mutant is rejected with its intended code. A standard mutant the artifact cannot support (no SDK path in `[zip] required`, no `botocore` metadata) must be declared in `[negatives.not_applicable]` with a reason, and the reasons are written beside the results |
 | `extract ZIP DIR` | Extracts and proves the files on disk are exactly the members, byte for byte |
@@ -109,7 +109,7 @@ passthrough_env = []
 
 [build]
 stages = ["dev", "training", "prod"]
-build_images = ["public.ecr.aws/sam/build-python3.12:latest-x86_64"]  # pulled if missing; digests recorded
+build_images = ["public.ecr.aws/sam/build-python3.12:latest-x86_64"]  # pulled if missing for the target platform; ID and digests recorded
 config_path = "config/env-{stage}.yml"
 # serverless = "node_modules/.bin/serverless"   # default, resolved in the checkout
 config_text = """SYNTHETIC: value
@@ -165,10 +165,18 @@ Unix sockets included, proving the guard with probes before tests start (each pr
 timeout, and any outcome but the guard's own refusal stops the run with exit 3). An xfailed
 test and a non-strict xpass count as skips: each fails the run unless its exact node id is in
 `allowed_skips`; so does a module-level skip, by its file's node id. Plugins load only from
-`[offline] plugins`: a positive `-p NAME` in the arguments stops the run (`-p no:NAME` is
-fine), as does any installed plugin the list does not name that registers at any point,
-however it arrives: a `conftest.py` or test module's `pytest_plugins`, or an import while
-tests run. `xdist` is refused,
+`[offline] plugins`: a positive `-p NAME` in the arguments stops the run, as does any
+installed plugin the list does not name that registers at any point, however it arrives: a
+`conftest.py` or test module's `pytest_plugins`, or an import while tests run. Every plugin
+the list names must load: the runner reads which plugins pytest holds after configuration and
+collection, before any test runs, prints them as `LOADED`, and stops the run (exit 3) if a
+listed one is missing, whether a `-p no:NAME` in the arguments or a `conftest.py` blocked it.
+A plugin counts as held only as the very object its entry point names, so neither another
+object registered under its name nor a registered module stands in for an object inside it. The check runs once
+collection is over, collection wrappers included, and again before each test body, so a plugin
+removed during one test stops the run before the next body runs.
+A `-p no:NAME` in ini `addopts` cannot disable one, since pytest reads addopts before the
+runner's own `-p NAME`. `xdist` is refused,
 since its workers would run without the guard. A run that exits 0 counts only when the runner
 recorded it finishing every collected test with at least one test run, so `os._exit(0)` or
 `pytest.exit(returncode=0)` in a test, or `--collect-only`, fails with `OFFLINE_GUARD`. Name resolution is not blocked. It runs the application's interpreter, which must be Python 3.11 or newer with pytest 7 or newer, with
