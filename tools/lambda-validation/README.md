@@ -172,8 +172,9 @@ the list names must load: the runner reads which plugins pytest holds after conf
 collection, before any test runs, prints them as `LOADED`, and stops the run (exit 3) if a
 listed one is missing, whether a `-p no:NAME` in the arguments or a `conftest.py` blocked it.
 A plugin counts as held only as the very object its entry point names, so neither another
-object registered under its name nor a registered module stands in for an object inside it. It is one reading,
-before the first test: test-time code that unregisters a plugin is not caught.
+object registered under its name nor a registered module stands in for an object inside it. The check runs once
+collection is over, collection wrappers included, and again before each test body, so a plugin
+removed during one test stops the run before the next body runs.
 A `-p no:NAME` in ini `addopts` cannot disable one, since pytest reads addopts before the
 runner's own `-p NAME`. `xdist` is refused,
 since its workers would run without the guard. A run that exits 0 counts only when the runner
