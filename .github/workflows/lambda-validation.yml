@@ -1,0 +1,71 @@
+name: Lambda validation tool
+
+# tools/lambda-validation is a separately versioned build-time package. Its consumers
+# pin it by commit, so every change runs its own suite, including the container checks.
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12', '3.13', '3.14']
+    defaults:
+      run:
+        working-directory: tools/lambda-validation
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install the tool and its test runner
+        run: |
+          python -m venv "$RUNNER_TEMP/lv"
+          "$RUNNER_TEMP/lv/bin/pip" install . pytest==8.4.2
+      - name: Lint the tool
+        run: |
+          python -m venv "$RUNNER_TEMP/lint"
+          "$RUNNER_TEMP/lint/bin/pip" install ruff==0.16.6 black==24.10.0
+          "$RUNNER_TEMP/lint/bin/ruff" check --select F,E9,B .
+          "$RUNNER_TEMP/lint/bin/black" -l 120 --check .
+      - name: Pull the Lambda runtime images the container tests use
+        run: |
+          for version in 3.11 3.12 3.13 3.14; do
+            docker pull --platform linux/amd64 "public.ecr.aws/lambda/python:$version"
+          done
+      - name: Tool tests, zero skips
+        run: |
+          "$RUNNER_TEMP/lv/bin/python" -m pytest -p no:cacheprovider -c /dev/null --rootdir . \
+            --junitxml="$RUNNER_TEMP/tool.xml" tests
+          "$RUNNER_TEMP/lv/bin/python" -c 'import os, xml.etree.ElementTree as ET; r = ET.parse(os.environ["RUNNER_TEMP"] + "/tool.xml").getroot(); assert sum(int(s.get("skipped", 0)) for s in r.iter("testsuite")) == 0'
+
+  root-distribution:
+    # The root nui-python-shared-utils wheel must never carry the tool.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install build
+      - run: python -m build --outdir "$RUNNER_TEMP/dist" .
+      - name: No tool members in the root wheel or sdist
+        # `set -e` ignores a `!`-negated command, so each test exits explicitly.
+        run: |
+          if unzip -Z1 "$RUNNER_TEMP"/dist/*.whl | grep -E '(^|/)(tools/|nui_lambda_validation)'; then exit 1; fi
+          if tar -tzf "$RUNNER_TEMP"/dist/*.tar.gz | grep -E '/tools/'; then exit 1; fi
+          unzip -Z1 "$RUNNER_TEMP"/dist/*.whl | grep '^nui_shared_utils/__init__.py$' >/dev/null
+          tar -tzf "$RUNNER_TEMP"/dist/*.tar.gz | grep '/nui_shared_utils/__init__.py$' >/dev/null  # no -q: an early exit would SIGPIPE the lister under pipefail

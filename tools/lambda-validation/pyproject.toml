@@ -1,0 +1,22 @@
+[build-system]
+# 77 is the first release that reads the SPDX `license` string below.
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nui-lambda-validation"
+version = "0.1.0"
+description = "Build-time checks for Python AWS Lambda deployment ZIPs, runtime images and offline test runs"
+readme = "README.md"
+license = "MIT"
+# tomllib, and tarfile extraction filters (3.11.4).
+requires-python = ">=3.11.4"
+# The checks parse requirement strings and markers. One exact pin keeps the tool's
+# own closure fixed, separate from every application it checks.
+dependencies = ["packaging==26.3"]
+
+[project.scripts]
+nui-lambda-validation = "nui_lambda_validation.cli:main"
+
+[tool.setuptools]
+packages = ["nui_lambda_validation"]

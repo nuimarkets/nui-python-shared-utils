@@ -52,6 +52,8 @@ Production-ready shared Python utilities for AWS Lambda functions, CLI tools, an
 
 **Complete documentation**: See [docs/](docs/README.md) for all guides and references.
 
+**Build-time Lambda artifact checks** live in a separate package, `nui-lambda-validation`, pinned by commit and never shipped in this distribution or in a Lambda ZIP: [tools/lambda-validation/README.md](tools/lambda-validation/README.md).
+
 **Component Guides:**
 
 - **[AWS Powertools Integration Guide](docs/guides/powertools-integration.md)** - Logging, metrics, error handling
