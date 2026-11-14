@@ -300,6 +300,13 @@ def fake_plugin(tmp_path):
 CONFTEST_ROUTE = "pytest_plugins = ['fakeplug']\n\ndef pytest_runtest_call(item):\n    open(MARKER, 'w').close()\n"
 MODULE_ROUTE = "pytest_plugins = ['fakeplug']\n\ndef test_x():\n    open(MARKER, 'w').close()\n"
 LATE_ROUTE = "def test_late(request):\n    request.config.pluginmanager.import_plugin('fakeplug')\n"
+# A conftest's own first-result run loop, which runs the tests itself and skips the ordinary loops.
+CUSTOM_LOOP = (
+    "\nimport pytest\n\n\n@pytest.hookimpl(tryfirst=True)\ndef pytest_runtestloop(session):\n"
+    "    for item in session.items:\n"
+    "        item.config.hook.pytest_runtest_protocol(item=item, nextitem=None)\n"
+    "    return True\n"
+)
 
 
 @pytest.mark.parametrize(
@@ -311,6 +318,7 @@ LATE_ROUTE = "def test_late(request):\n    request.config.pluginmanager.import_p
         ([], CONFTEST_ROUTE, None, "plugins loaded outside [offline] plugins: ['fakeplug_ep']", "['fakeplug_ep']"),
         ([], None, MODULE_ROUTE, "outside [offline] plugins: ['fakeplug_ep']", "['fakeplug_ep']"),
         ([], None, LATE_ROUTE, "outside [offline] plugins: ['fakeplug_ep']", "[]"),
+        ([], CONFTEST_ROUTE + CUSTOM_LOOP, None, "outside [offline] plugins: ['fakeplug_ep']", "['fakeplug_ep']"),
     ],
 )
 def test_a_plugin_declared_not_loaded_cannot_load_another_way(
@@ -395,6 +403,7 @@ IMPOSTOR_UNDER_THE_NAME = (
         (["-p", "no:fakeplug_ep"], MODULE_WITHOUT_OBJECT),
         ([], IMPOSTOR_UNDER_THE_NAME),
         ([], BLOCKED_AFTER_COLLECTION),
+        ([], BLOCKED_IN_CONFTEST + CUSTOM_LOOP),
     ],
 )
 def test_a_declared_plugin_that_is_not_loaded_stops_the_run(project, tmp_path, capfd, args, conftest):

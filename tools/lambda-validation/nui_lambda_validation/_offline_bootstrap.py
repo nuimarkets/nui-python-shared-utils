@@ -142,11 +142,12 @@ class PluginPolicy:
             self.missing = inactive
             pytest.exit("declared plugins not loaded", returncode=3)
 
-    def pytest_runtestloop(self, session):
+    def before_tests(self, session):
         # Once collection is over, a collection-finish wrapper's code after its yield included, and
         # before any test runs: everything arguments, ini addopts, configuration and collection
-        # registered or blocked. LOADED is read here, from pytest, not from the policy. Returns
-        # None, so pytest's own loop still runs the tests.
+        # registered or blocked. LOADED is read here, from pytest, not from the policy. Called
+        # from a `pytest_runtestloop` wrapper in main, so a conftest's own first-result loop
+        # cannot run the tests without it.
         import pytest
 
         self.require(session.config.pluginmanager, report=True)
@@ -272,7 +273,17 @@ def main():
         arguments += ["-p", plugin]
     skips = SkipPolicy()
     plugins = PluginPolicy(policy)
-    status = int(pytest.main(arguments + policy["args"], plugins=[skips, plugins]))
+
+    class BeforeTests:
+        # A wrapper runs before every `pytest_runtestloop` implementation, pytest's own and a
+        # conftest's first-result loop alike, so the plugin check comes before any test whoever
+        # runs them.
+        @pytest.hookimpl(hookwrapper=True)
+        def pytest_runtestloop(self, session):
+            plugins.before_tests(session)
+            yield
+
+    status = int(pytest.main(arguments + policy["args"], plugins=[skips, plugins, BeforeTests()]))
     if plugins.missing:
         # Whatever status pytest settled on: another hook may have replaced the exit code.
         print(f"OFFLINE_GUARD: plugins in [offline] plugins not loaded: {plugins.missing}", file=sys.stderr)
