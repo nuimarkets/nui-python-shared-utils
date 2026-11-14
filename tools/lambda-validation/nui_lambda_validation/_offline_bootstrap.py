@@ -83,6 +83,15 @@ def plugin_inventory(policy):
     return installed
 
 
+def target(entry):
+    """The object an entry point names, if its module is already imported. Nothing is imported
+    here: a module that was never imported holds no registered plugin."""
+    found = sys.modules.get(entry.module)
+    for part in (entry.attr or "").split(".") if entry.attr else ():
+        found = getattr(found, part, None)
+    return found if found is not None else object()
+
+
 class PluginPolicy:
     """No installed plugin outside the policy list may register, however it arrives (an argument,
     an environment variable, a conftest or test module's ``pytest_plugins``, an import mid-run).
@@ -91,7 +100,8 @@ class PluginPolicy:
     def __init__(self, policy):
         from importlib.metadata import entry_points
 
-        self.entries = {entry.name: entry.module for entry in entry_points(group="pytest11")}
+        self.points = {entry.name: entry for entry in entry_points(group="pytest11")}
+        self.entries = {name: entry.module for name, entry in self.points.items()}
         self.declared = list(policy["plugins"])
         self.forbidden = {name: module for name, module in self.entries.items() if name not in self.declared}
         self.loaded = []
@@ -109,11 +119,15 @@ class PluginPolicy:
         print(f"OFFLINE_GUARD: plugins loaded outside [offline] plugins: {sorted(self.loaded)}", file=sys.stderr)
 
     def active(self, manager):
-        """Installed plugins pytest holds now, by entry-point name or module. A blocked name
-        (`-p no:NAME` after the runner's own `-p NAME`) maps to None, so it is not active."""
-        modules = {getattr(plugin, "__name__", None) for _, plugin in manager.list_name_plugin() if plugin is not None}
+        """Installed plugins pytest holds now: under the entry point's name, or as the very object
+        the entry point names (a module that ``pytest_plugins`` or an import registered under its
+        own name). A blocked name (`-p no:NAME` after the runner's own `-p NAME`) maps to None, so
+        it is not active, and a registered module does not stand in for an object inside it."""
+        held = [plugin for _, plugin in manager.list_name_plugin() if plugin is not None]
         return sorted(
-            name for name, module in self.entries.items() if manager.get_plugin(name) is not None or module in modules
+            name
+            for name, entry in self.points.items()
+            if manager.get_plugin(name) is not None or any(plugin is target(entry) for plugin in held)
         )
 
     def pytest_collection_finish(self, session):

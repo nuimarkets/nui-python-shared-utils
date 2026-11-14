@@ -367,6 +367,8 @@ def run_declared(project, env, args):
 
 
 BLOCKED_IN_CONFTEST = "def pytest_configure(config):\n    config.pluginmanager.set_blocked('fakeplug_ep')\n"
+# The entry point's module, registered under its own name, without the object the entry point names.
+MODULE_WITHOUT_OBJECT = "pytest_plugins = ['fakeplug']\n"
 
 
 @pytest.mark.parametrize(
@@ -376,6 +378,7 @@ BLOCKED_IN_CONFTEST = "def pytest_configure(config):\n    config.pluginmanager.s
         (["-p", "no:fakeplug_ep"], None),
         (["-pno:fakeplug_ep"], None),
         ([], BLOCKED_IN_CONFTEST),
+        (["-p", "no:fakeplug_ep"], MODULE_WITHOUT_OBJECT),
     ],
 )
 def test_a_declared_plugin_that_is_not_loaded_stops_the_run(project, tmp_path, capfd, args, conftest):
