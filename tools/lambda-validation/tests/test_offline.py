@@ -385,10 +385,14 @@ def test_a_declared_plugin_that_is_not_loaded_stops_the_run(project, tmp_path, c
     env, _ = object_plugin(tmp_path)
     if conftest:
         (project / "tests" / "conftest.py").write_text(conftest)
+    # A test body that leaves a marker: the refusal must come before any test runs.
+    marker = tmp_path / "a-test-ran"
+    (project / "tests" / "test_marker.py").write_text(f"def test_marker():\n    open({str(marker)!r}, 'w').close()\n")
     assert run_declared(project, env, args) == 3
     out, err = capfd.readouterr()
     assert "OFFLINE_GUARD: plugins in [offline] plugins not loaded: ['fakeplug_ep']" in err
     assert "LOADED []" in out
+    assert not marker.exists(), "a test ran with a declared plugin missing"
 
 
 @pytest.mark.parametrize("ini", [None, "[pytest]\naddopts = -p no:fakeplug_ep\n"])
