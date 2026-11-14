@@ -431,6 +431,20 @@ def test_a_missing_declared_plugin_exits_3_beside_an_unexpected_collection_skip(
     assert "OFFLINE_GUARD: plugins in [offline] plugins not loaded: ['fakeplug_ep']" in capfd.readouterr().err
 
 
+def test_a_declared_plugin_removed_by_a_fixture_stops_the_run_before_the_body(project, tmp_path, capfd):
+    # The check runs after the test's setup and before its body, not after the body.
+    env, _ = object_plugin(tmp_path)
+    marker = tmp_path / "the-body-ran"
+    (project / "tests" / "test_0_fixture.py").write_text(
+        "import pytest\n\n\n@pytest.fixture\ndef removed(request):\n"
+        "    request.config.pluginmanager.set_blocked('fakeplug_ep')\n\n\n"
+        f"def test_body(removed):\n    open({str(marker)!r}, 'w').close()\n"
+    )
+    assert run_declared(project, env, []) == 3
+    assert "OFFLINE_GUARD: plugins in [offline] plugins not loaded: ['fakeplug_ep']" in capfd.readouterr().err
+    assert not marker.exists(), "a test body ran after its fixture removed a declared plugin"
+
+
 def test_a_declared_plugin_removed_during_a_test_stops_the_run_before_the_next_body(project, tmp_path, capfd):
     env, _ = object_plugin(tmp_path)
     marker = tmp_path / "a-later-test-ran"
