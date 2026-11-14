@@ -115,7 +115,10 @@ class PluginPolicy:
         plugin_name = manager.get_name(plugin)
         module = getattr(plugin, "__name__", None)
         for name, entry_module in self.forbidden.items():
-            if (plugin_name == name or module == entry_module) and name not in self.loaded:
+            # By its entry point's name, its module's name, or as the very object its entry point
+            # names, whatever name a conftest registers that object under.
+            held = plugin_name == name or module == entry_module or plugin is target(self.points[name])
+            if held and name not in self.loaded:
                 self.loaded.append(name)
 
     def report(self):

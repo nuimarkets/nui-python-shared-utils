@@ -469,6 +469,31 @@ def test_a_declared_plugin_removed_during_a_test_stops_the_run_before_the_next_b
     assert not marker.exists(), "a test body ran after a declared plugin was removed"
 
 
+def test_a_plugin_outside_the_policy_registered_under_an_alias_stops_the_run(project, tmp_path, capfd):
+    # The entry point names an object; a conftest registers that object under another name.
+    env, _ = object_plugin(tmp_path)
+    marker = tmp_path / "a-test-ran"
+    (project / "tests" / "conftest.py").write_text(
+        "import fakeplug\n\n\ndef pytest_configure(config):\n"
+        "    config.pluginmanager.register(fakeplug.hooks, 'alias')\n"
+    )
+    (project / "tests" / "test_marker.py").write_text(f"def test_marker():\n    open({str(marker)!r}, 'w').close()\n")
+    declared = {name: "unused" for name in installed_plugins()}
+    declared["fakeplug_ep"] = "declared not loaded"
+    status = offline.run(
+        sys.executable,
+        project,
+        ["-q", "-p", "no:cacheprovider", "tests"],
+        allowed_skips=["tests/test_skips.py::test_allowed"],
+        passthrough=["KEPT"],
+        fixed_env=env,
+        not_loaded=declared,
+    )
+    assert status == 3
+    assert "plugins loaded outside [offline] plugins: ['fakeplug_ep']" in capfd.readouterr().err
+    assert not marker.exists(), "a test ran with a plugin the policy refused"
+
+
 @pytest.mark.parametrize("ini", [None, "[pytest]\naddopts = -p no:fakeplug_ep\n"])
 def test_a_declared_plugin_that_loads_is_reported_loaded(project, tmp_path, capfd, ini):
     # pytest puts ini addopts (and PYTEST_ADDOPTS, which the runner reserves) before the
