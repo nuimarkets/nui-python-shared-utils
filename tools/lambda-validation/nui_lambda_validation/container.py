@@ -109,12 +109,29 @@ def _local_id(image):
     return None if found is None else found["Id"]
 
 
-def _provides(reference, machine):
-    """Whether the local image ``reference`` holds the target platform. Under the containerd
-    image store one ID can hold several platforms, so the check asks for the platform rather
-    than reading the image's default one."""
+def _platform_image(reference, machine):
+    """The target platform's record inside the local image ``reference``, or None when it does
+    not hold that platform. Under the containerd image store one ID can hold several platforms,
+    so the check asks for the platform rather than reading the image's default one, and a
+    platform listed there but never pulled answers with an empty one."""
     found = _inspect("--platform", PLATFORM[machine], reference)
-    return found is not None and f"{found.get('Os')}/{found.get('Architecture')}" == PLATFORM[machine]
+    if found is not None and f"{found.get('Os')}/{found.get('Architecture')}" == PLATFORM[machine]:
+        return found
+    return None
+
+
+def _provides(reference, machine):
+    return _platform_image(reference, machine) is not None
+
+
+def platform_id(reference, machine):
+    """The ID of the target platform's image inside ``reference``, the image a run of
+    ``reference`` with that platform executes. Under the containerd store ``reference`` can be a
+    multi-platform index whose own ID differs from it; elsewhere the two are the same."""
+    found = _platform_image(reference, machine)
+    if found is None:
+        fail("BUILD", f"image {reference} does not provide {PLATFORM[machine]}")
+    return found["Id"]
 
 
 def image_digests(image):

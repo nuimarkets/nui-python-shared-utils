@@ -96,6 +96,7 @@ def verify(adapter, output, stages=None, keep_extracted=False):
         image=image,
         image_id=run_image,
         image_platform=container.PLATFORM[machine],
+        image_platform_id=container.platform_id(run_image, machine),
         image_digests=container.image_digests(run_image),
         build_images={name: container.image_digests(ids[name]) for name in spec.get("build_images", [])},
         build_image_ids={name: ids[name] for name in spec.get("build_images", [])},

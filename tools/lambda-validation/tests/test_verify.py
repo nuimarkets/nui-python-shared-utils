@@ -106,6 +106,7 @@ def stubs(tmp_path, monkeypatch):
     monkeypatch.setattr(build, "package", package)
     monkeypatch.setattr(container, "ensure_image", ensure)
     monkeypatch.setattr(container, "image_digests", digests)
+    monkeypatch.setattr(container, "platform_id", lambda reference, machine: f"{reference}/{machine}")
     installed = json.dumps({"vcs_info": {"commit_id": SHA}})
     monkeypatch.setattr(cli.importlib_metadata, "distribution", lambda name: FakeDistribution(installed))
     monkeypatch.setattr(container, "run", run)
@@ -133,6 +134,7 @@ def test_verify_runs_every_stage_and_records_both_images(tmp_path, project, stub
     # Provenance names the checked image itself: its ID, its platform, and digests read by that ID.
     runtime, builder = "example.invalid/lambda-python:3.12", "example.invalid/build-python3.12:x86_64"
     assert manifest["image_id"] == image_id(runtime) and manifest["image_platform"] == "linux/amd64"
+    assert manifest["image_platform_id"] == f"{image_id(runtime)}/x86_64"
     assert manifest["build_image_ids"] == {builder: image_id(builder)}
     assert stubs["digests"] == [image_id(runtime), image_id(builder)]
     # Every container run executes that ID, never the mutable tag, and never pulls.
@@ -403,6 +405,7 @@ class FakeDocker:
     ):
         self.tags = dict(store or {})  # tag -> (id, platforms)
         self.unpulled = set(unpulled)  # (id, platform) listed in the index, content never pulled
+        self.platform_ids = {}  # (id, platform) -> the platform image's own ID, when it differs
         self.registry = registry or {}  # tag -> {platform: (id, platforms)}
         self.inspect_error, self.platform_error, self.pull_error = inspect_error, platform_error, pull_error
         self.commands = []
@@ -438,7 +441,10 @@ class FakeDocker:
                 # A platform listed in the local index whose content was never pulled: the
                 # containerd store answers rc 0 with an empty platform, not an error.
                 system = architecture = ""
-            record = [{"Id": image_id, "Os": system, "Architecture": architecture, "RepoDigests": []}]
+            record_id = (
+                self.platform_ids.get((image_id, platform), image_id) if command[3] == "--platform" else image_id
+            )
+            record = [{"Id": record_id, "Os": system, "Architecture": architecture, "RepoDigests": []}]
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps(record), stderr="")
         if command[1] == "pull":
             assert command[2] == "--platform"
@@ -485,6 +491,21 @@ def test_a_cached_image_of_another_platform_is_pulled_for_the_target(monkeypatch
     assert docker.pulls() == [["docker", "pull", "--platform", platform, "img:1"]]
     # The ID it returns, and the digests read through it, are the pulled image's.
     assert docker.commands[-1] == ["docker", "image", "inspect", "--platform", platform, wanted]
+
+
+def test_platform_id_names_the_platform_image_inside_an_index(monkeypatch):
+    docker = FakeDocker({"img:1": (BOTH, ["linux/amd64", "linux/arm64"])})
+    monkeypatch.setattr(container.subprocess, "run", docker)
+    assert container.platform_id(BOTH, "x86_64") == BOTH
+    # The record the daemon returns for the platform is what is named, not the reference.
+    docker.platform_ids = {(BOTH, "linux/arm64"): ARM}
+    assert container.platform_id(BOTH, "aarch64") == ARM
+    docker = FakeDocker({"img:1": (AMD, ["linux/amd64"])})
+    monkeypatch.setattr(container.subprocess, "run", docker)
+    assert code_of(container.platform_id, AMD, "aarch64") == "BUILD"
+    docker = FakeDocker({"img:1": (BOTH, ["linux/amd64"])}, unpulled={(BOTH, "linux/amd64")})
+    monkeypatch.setattr(container.subprocess, "run", docker)
+    assert code_of(container.platform_id, BOTH, "x86_64") == "BUILD"
 
 
 def test_a_listed_but_unpulled_platform_is_pulled(monkeypatch):

@@ -201,6 +201,7 @@ def test_ensure_image_runs_by_the_checked_id_on_a_real_daemon(tmp_path, image):
     reference = container.ensure_image(image, "x86_64")
     assert reference.startswith("sha256:")
     assert container.image_digests(reference)
+    assert container.platform_id(reference, "x86_64").startswith("sha256:")
     log = tmp_path / "run.log"
     probe = ("-c", "import platform; print(platform.machine())")
     command = container.argv(reference, fake_root(tmp_path / "task"), "x86_64", args=probe)
