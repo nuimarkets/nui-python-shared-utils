@@ -89,12 +89,17 @@ def verify(adapter, output, stages=None, keep_extracted=False):
         (proof / "pins.json").write_text(json.dumps(read_pins(adapter.file(deps["pins"])), indent=2) + "\n")
     image = box["image"]
     machine = adapter.target["machine"]
-    for name in [image, *spec.get("build_images", [])]:
-        container.ensure_image(name, machine)
+    ids = {name: container.ensure_image(name, machine) for name in [image, *spec.get("build_images", [])]}
+    # Every run below names the checked ID, never the tag, so the record is what executed.
+    run_image = ids[image]
     manifest.update(
         image=image,
-        image_digests=container.image_digests(image),
-        build_images={name: container.image_digests(name) for name in spec.get("build_images", [])},
+        image_id=run_image,
+        image_platform=container.PLATFORM[machine],
+        image_platform_id=container.platform_id(run_image, machine),
+        image_digests=container.image_digests(run_image),
+        build_images={name: container.image_digests(ids[name]) for name in spec.get("build_images", [])},
+        build_image_ids={name: ids[name] for name in spec.get("build_images", [])},
         artifacts=[],
     )
     serverless = checkout.file(spec.get("serverless", "node_modules/.bin/serverless"))
@@ -121,15 +126,15 @@ def verify(adapter, output, stages=None, keep_extracted=False):
         major, minor = adapter.target["python"].split(".")
         version_log = output / f"python-version-{stage}.log"
         same = f"import sys; sys.exit(0 if sys.version_info[:2] == ({int(major)}, {int(minor)}) else 1)"
-        if container.run(container.argv(image, extracted, machine, args=("-c", same)), version_log):
+        if container.run(container.argv(run_image, extracted, machine, args=("-c", same)), version_log):
             fail("BUILD", f"{image} is not Python {adapter.target['python']}, the [target] the host checks used")
         smoke_log = output / f"smoke-{stage}.log"
-        if container.run(container.argv(image, extracted, machine, smoke_env, script, proof=proof), smoke_log):
+        if container.run(container.argv(run_image, extracted, machine, smoke_env, script, proof=proof), smoke_log):
             fail("BUILD", f"container smoke failed for {stage} ({_runtime_failure(smoke_log)}); see {smoke_log}")
         # The artifact on PYTHONPATH: `python -m pip` drops the working directory from sys.path.
         pip_log = output / f"pip-check-{stage}.log"
         pip_check = container.argv(
-            image, extracted, machine, smoke_env, args=("-m", "pip", "check"), pythonpath=container.TASK_ROOT
+            run_image, extracted, machine, smoke_env, args=("-m", "pip", "check"), pythonpath=container.TASK_ROOT
         )
         if container.run(pip_check, pip_log):
             fail("BUILD", f"pip check failed for {stage}; see {pip_log}")
