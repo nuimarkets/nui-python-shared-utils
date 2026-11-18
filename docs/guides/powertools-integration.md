@@ -105,8 +105,10 @@ logger = get_powertools_logger("my-service", local_dev_colors=False)
 ```
 
 Lambda loggers default to no DEBUG sampling and honor `level`. Set
-`POWERTOOLS_LOGGER_SAMPLE_RATE` to a rate from `0` to `1` to enable DEBUG sampling
-for that fraction of invocations.
+`POWERTOOLS_LOGGER_SAMPLE_RATE` to configure Powertools' native DEBUG sampling:
+`0` disables sampling and `1` enables DEBUG for every invocation. For intermediate
+rates, when sampling decisions are refreshed depends on the installed Powertools
+version.
 
 ### Structured Logging
 
