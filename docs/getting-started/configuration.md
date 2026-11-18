@@ -34,8 +34,20 @@ pass `host=` instead.
 Assigning `None` to `get_config().es_host` resets it to the current host environment variable
 or `localhost:9200` and removes its explicit config priority. Deleting the attribute does the
 same. Every non-`None` assignment is explicit, including writing back a saved or default
-value. To restore the complete config state after a temporary override, save the `Config`
-object and restore it with `set_config`.
+value. To restore the complete config state after a temporary override, keep the saved
+`Config` object unchanged and apply the override through `configure`, which creates a
+separate config object:
+
+```python
+from nui_shared_utils.config import configure, get_config, set_config
+
+saved_config = get_config()
+try:
+    configure(es_host="temporary-host:9200")
+    # Use the temporary configuration here.
+finally:
+    set_config(saved_config)
+```
 
 ## Environment Variables
 
