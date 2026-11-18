@@ -95,3 +95,35 @@ def test_setup_channels_configures_and_paces_channels(tmp_path):
         "sleep",
     ]
     assert sleep.call_args_list == [call(1), call(1)]
+
+
+def test_create_channels_delegates_and_continues_after_unsuccessful_setup():
+    from nui_shared_utils.slack_setup.channel_creator import ChannelCreator
+    from nui_shared_utils.slack_setup.channel_definitions import ChannelDefinition
+
+    creator = object.__new__(ChannelCreator)
+    definitions = [
+        ChannelDefinition(name=name, purpose="", description="", topic="") for name in ["missing", "broken", "working"]
+    ]
+    creator.setup_channel = Mock(side_effect=[None, RuntimeError("setup failed"), "C3"])
+
+    assert creator.create_channels(definitions) == {"working": "C3"}
+    assert creator.setup_channel.call_args_list == [call(definition) for definition in definitions]
+
+
+def test_setup_channel_skips_remaining_steps_when_channel_id_is_unresolved():
+    from nui_shared_utils.slack_setup.channel_creator import ChannelCreator
+    from nui_shared_utils.slack_setup.channel_definitions import ChannelDefinition
+
+    creator = object.__new__(ChannelCreator)
+    definition = ChannelDefinition(name="missing", purpose="", description="", topic="")
+    creator._create_or_get_channel = Mock(return_value=None)
+    helper_names = ["_bot_join_channel", "_configure_channel", "_invite_users", "_post_welcome_message"]
+    for name in helper_names:
+        setattr(creator, name, Mock())
+
+    with patch("nui_shared_utils.slack_setup.channel_creator.time.sleep") as sleep:
+        assert creator.setup_channel(definition) is None
+        for name in helper_names:
+            getattr(creator, name).assert_not_called()
+        sleep.assert_not_called()
