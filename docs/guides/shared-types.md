@@ -69,8 +69,9 @@ Mixin providing standardized health check functionality.
 
 Deprecated mixin providing retry functionality for operations. Each call to
 `execute_with_retry()` emits a `DeprecationWarning`. Use the public `with_retry`
-decorator directly for new code; existing calls retain their retry and error-handling
-behavior.
+decorator directly for new code. Existing calls retain their retry and error-handling
+behavior unless the caller treats `DeprecationWarning` as an error; those callers must
+migrate to `with_retry`, since the warning raises before the operation executes.
 
 ```python
 execute_with_retry(
@@ -335,16 +336,17 @@ summary = aggregator.get_summary()
 
 ```python
 from nui_shared_utils import with_retry
+from nui_shared_utils.error_handler import NonRetryableError
 
 @with_retry(
-    max_attempts: int = 3,
-    initial_delay: float = 1.0,
-    max_delay: float = 60.0,
-    exponential_base: float = 2.0,
-    jitter: bool = True,
-    retryable_exceptions: tuple = (Exception,),
-    non_retryable_exceptions: tuple = (NonRetryableError,),
-    on_retry: Callable = None         # callback(func_name, attempt, error, delay)
+    max_attempts=3,
+    initial_delay=1.0,
+    max_delay=60.0,
+    exponential_base=2.0,
+    jitter=True,
+    retryable_exceptions=(Exception,),
+    non_retryable_exceptions=(NonRetryableError,),
+    on_retry=None                     # callback(func_name, attempt, error, delay)
 )
 def my_function(): ...
 ```
