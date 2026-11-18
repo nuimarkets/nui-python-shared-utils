@@ -43,7 +43,8 @@ that contained them.
 
 - Assigning `get_config().es_host` gives the host explicit config priority above a credentials
   host and below host environment variables or the client's `host` argument. Assigning `None`
-  resets it to the current environment/default value and removes explicit priority.
+  (or deleting the attribute) resets it to the current environment/default value and removes
+  explicit priority. Writing back a saved or default string counts as an explicit assignment.
 - `DatabaseClient` fetches Secrets Manager credentials without rechecking environment variables
   after selecting the store tier, matching `PostgreSQLClient`. The public
   `get_database_credentials` helper keeps its environment-first behavior.

@@ -82,6 +82,11 @@ class Config:
             else os.environ.get("ES_HOST") or os.environ.get("ELASTICSEARCH_HOST") or "localhost:9200"
         )
 
+    @es_host.deleter
+    def es_host(self) -> None:
+        """Reset host priority when the attribute is deleted (including mock cleanup)."""
+        self.es_host = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Return configuration as dictionary for debugging/logging."""
         return {

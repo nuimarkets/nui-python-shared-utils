@@ -32,7 +32,10 @@ key in an explicit `credentials` dict ranks where the secret's does, so to pin o
 pass `host=` instead.
 
 Assigning `None` to `get_config().es_host` resets it to the current host environment variable
-or `localhost:9200` and removes its explicit config priority.
+or `localhost:9200` and removes its explicit config priority. Deleting the attribute does the
+same. Every non-`None` assignment is explicit, including writing back a saved or default
+value. To restore the complete config state after a temporary override, save the `Config`
+object and restore it with `set_config`.
 
 ## Environment Variables
 
