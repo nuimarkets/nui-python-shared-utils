@@ -697,15 +697,18 @@ def test_reused_client_context_is_current_and_cleared(invocation_slack, reraise)
     assert "Unknown" in handler({}, object())
 
 
-def test_explicit_client_context_wins(invocation_slack):
+@pytest.mark.parametrize("local", [False, True])
+def test_explicit_client_context_wins(invocation_slack, monkeypatch, local):
     from nui_shared_utils.powertools_helpers import powertools_handler
 
+    if local:
+        monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME")
     client = invocation_slack()
     client.set_handler_context(_invocation_context("345678901234"))
 
     @powertools_handler(service_name="test")
     def handler(event, context):
-        return _account_header(client)
+        return _routed_account_header(client)
 
     assert "Staging (345678901234)" in handler({}, _invocation_context("123456789012"))
 
@@ -745,26 +748,40 @@ def test_nested_handler_restores_outer_context(invocation_slack):
     assert "123456789012" not in _account_header(client)
 
 
-def test_concurrent_handlers_keep_context_separate(invocation_slack):
+@pytest.mark.parametrize("local", [False, True])
+def test_concurrent_handlers_keep_context_separate(invocation_slack, monkeypatch, local):
     from concurrent.futures import ThreadPoolExecutor
-    from threading import Barrier
+    from threading import Event
 
     from nui_shared_utils.powertools_helpers import powertools_handler
 
+    if local:
+        monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME")
     client = invocation_slack()
-    barrier = Barrier(2)
+    first_entered, second_entered, first_rendered = Event(), Event(), Event()
 
     @powertools_handler(service_name="test", reraise_exceptions=True)
     def handler(event, context):
-        barrier.wait(timeout=5)
-        return _account_header(client)
+        if event["first"]:
+            first_entered.set()
+            assert second_entered.wait(timeout=5)
+            try:
+                return _routed_account_header(client)
+            finally:
+                first_rendered.set()
+        second_entered.set()
+        assert first_rendered.wait(timeout=5)
+        return _routed_account_header(client)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        accounts = ("123456789012", "234567890123")
-        results = list(pool.map(lambda account: handler({}, _invocation_context(account)), accounts))
-    for account, other_account, result in zip(accounts, reversed(accounts), results):
-        assert account in result
-        assert other_account not in result
+        first = pool.submit(handler, {"first": True}, _invocation_context("123456789012"))
+        assert first_entered.wait(timeout=5)
+        second = pool.submit(handler, {"first": False}, _invocation_context("234567890123"))
+        first_header, second_header = first.result(timeout=5), second.result(timeout=5)
+    assert "123456789012" in first_header
+    assert "234567890123" not in first_header
+    assert "234567890123" in second_header
+    assert "123456789012" not in second_header
 
 
 def test_decorator_alert_client_uses_current_context(invocation_slack, monkeypatch):
