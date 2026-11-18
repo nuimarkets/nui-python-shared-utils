@@ -8,6 +8,20 @@ that contained them.
 
 ## [Unreleased]
 
+### Added
+
+- `ChannelCreator.setup_channel(definition)` exposes single-channel setup, including
+  bot membership, configuration, invitations, welcome messages, and pacing.
+
+### Fixed
+
+- Slack channel setup through the CLI observes the same one-second delay as batch setup.
+
+### Deprecated
+
+- `RetryableOperationMixin.execute_with_retry()` emits a `DeprecationWarning` on use.
+  Use the public `with_retry` decorator directly instead.
+
 ## [2.6.0] - 2026-11-18
 
 ### Fixed

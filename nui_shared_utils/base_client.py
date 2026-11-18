@@ -3,6 +3,7 @@ Base client class providing common functionality for AWS service clients.
 """
 
 import logging
+import warnings
 from typing import Optional, Dict, Any
 from abc import ABC, abstractmethod
 
@@ -279,7 +280,9 @@ class ServiceHealthMixin:
 
 class RetryableOperationMixin:
     """
-    Mixin providing retry functionality for operations.
+    Deprecated mixin providing retry functionality for operations.
+
+    Use error_handler.with_retry directly for new code.
     """
 
     def execute_with_retry(self, operation_func, operation_name: str, max_attempts: int = 3, **retry_kwargs):
@@ -295,6 +298,11 @@ class RetryableOperationMixin:
         Returns:
             Result of operation_func
         """
+        warnings.warn(
+            "RetryableOperationMixin is deprecated; use nui_shared_utils.with_retry directly instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         from .error_handler import with_retry
 
         # Apply retry decorator dynamically

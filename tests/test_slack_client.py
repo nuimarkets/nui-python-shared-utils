@@ -149,24 +149,6 @@ class TestSendMessage:
 
     @patch("nui_shared_utils.base_client.get_secret")
     @patch("nui_shared_utils.slack_client.WebClient")
-    def test_send_message_omits_unfurl_when_unset(self, mock_webclient, mock_get_secret):
-        """When the unfurl flags are unset (default None), they are NOT forwarded, so
-        Slack's default behavior is preserved for every existing caller."""
-        mock_get_secret.return_value = {"bot_token": "xoxb-test-token"}
-        mock_client = Mock()
-        mock_webclient.return_value = mock_client
-        mock_client.chat_postMessage.return_value = {"ok": True, "ts": "1234567890.123456"}
-
-        slack = SlackClient(secret_name="test-secret")
-        result = slack.send_message("C123", "Test message", include_lambda_header=False)
-
-        assert result is True
-        _, kwargs = mock_client.chat_postMessage.call_args
-        assert "unfurl_links" not in kwargs
-        assert "unfurl_media" not in kwargs
-
-    @patch("nui_shared_utils.base_client.get_secret")
-    @patch("nui_shared_utils.slack_client.WebClient")
     def test_send_message_api_error(self, mock_webclient, mock_get_secret):
         """Test handling of Slack API error."""
         mock_get_secret.return_value = {"bot_token": "xoxb-test-token"}

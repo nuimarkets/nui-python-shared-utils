@@ -465,7 +465,11 @@ class TestRetryableOperationMixin:
         def successful_operation():
             return "success"
 
-        result = client.execute_with_retry(successful_operation, "test_operation", max_attempts=3)
+        with pytest.warns(DeprecationWarning, match="RetryableOperationMixin is deprecated") as warnings:
+            result = client.execute_with_retry(successful_operation, "test_operation", max_attempts=3)
+
+        assert len(warnings) == 1
+        assert warnings[0].filename == __file__
 
         assert result == "success"
 
