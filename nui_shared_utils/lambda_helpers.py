@@ -5,10 +5,14 @@ Provides standardized environment info extraction for logging and metrics contex
 """
 
 import os
+from contextvars import ContextVar
 from typing import Dict, Union
 
-
 __all__ = ["get_lambda_environment_info"]
+
+
+# Shared only for the duration of a decorated invocation, including nested calls.
+_handler_context: ContextVar[object] = ContextVar("lambda_handler_context", default=None)
 
 
 def get_lambda_environment_info() -> Dict[str, Union[str, bool]]:
@@ -61,12 +65,7 @@ def get_lambda_environment_info() -> Dict[str, Union[str, bool]]:
 
     # Environment detection
     # Support common env var patterns: ENVIRONMENT, ENV, STAGE
-    environment = (
-        os.getenv("ENVIRONMENT")
-        or os.getenv("ENV")
-        or os.getenv("STAGE")
-        or "unknown"
-    ).lower()
+    environment = (os.getenv("ENVIRONMENT") or os.getenv("ENV") or os.getenv("STAGE") or "unknown").lower()
 
     # Normalize common environment names
     if environment in ("production", "prd"):

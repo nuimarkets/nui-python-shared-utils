@@ -52,7 +52,7 @@ class TestGetPowertoolsLogger:
                 mock_logger_class.assert_called_once_with(
                     service="test-service",
                     level="INFO",
-                    sampling_rate=1,
+                    sampling_rate=0,
                     datefmt="%Y-%m-%dT%H:%M:%SZ",
                     utc=True,
                 )
@@ -598,3 +598,172 @@ class TestOptionalImports:
             # Should work without coloredlogs
             logger = get_powertools_logger("test-service", local_dev_colors=True)
             assert isinstance(logger, logging.Logger)
+
+
+@pytest.mark.parametrize("sample_rate, expect_debug", [(None, False), ("0", False), ("1", True)])
+def test_lambda_logger_respects_sampling(monkeypatch, capsys, sample_rate, expect_debug):
+    """Exercise real Powertools output, including context injection on warm calls."""
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from nui_shared_utils.powertools_helpers import get_powertools_logger
+
+    monkeypatch.setenv("AWS_LAMBDA_RUNTIME_API", "127.0.0.1:9001")
+    monkeypatch.delenv("AWS_SAM_LOCAL", raising=False)
+    monkeypatch.delenv("POWERTOOLS_LOGGER_SAMPLE_RATE", raising=False)
+    if sample_rate is not None:
+        monkeypatch.setenv("POWERTOOLS_LOGGER_SAMPLE_RATE", sample_rate)
+    logger = get_powertools_logger(f"sampling-{uuid4()}", level="INFO")
+    context = SimpleNamespace(
+        function_name="test-function",
+        function_version="$LATEST",
+        invoked_function_arn="arn:aws:lambda:us-east-1:123456789012:function:test-function",
+        memory_limit_in_mb=128,
+        aws_request_id="request-1",
+    )
+
+    @logger.inject_lambda_context
+    def handler(event, context):
+        logger.debug("debug-marker")
+        logger.info("info-marker")
+
+    try:
+        for _ in range(2):
+            handler({}, context)
+            output = capsys.readouterr().out
+            assert "info-marker" in output
+            assert ("debug-marker" in output) is expect_debug
+    finally:
+        for log_handler in logger.handlers[:]:
+            logger.removeHandler(log_handler)
+            log_handler.close()
+
+
+@pytest.fixture
+def invocation_slack(monkeypatch):
+    """Build real clients with no AWS or Slack network calls."""
+    from nui_shared_utils.slack_client import SlackClient
+
+    monkeypatch.setenv("AWS_LAMBDA_RUNTIME_API", "127.0.0.1:9001")
+    monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", "test-function")
+    # Keep this suite focused on context propagation, independent of logger state.
+    logger = MagicMock()
+    logger.inject_lambda_context.side_effect = lambda func: func
+    monkeypatch.setattr("nui_shared_utils.powertools_helpers.get_powertools_logger", lambda *a, **k: logger)
+    monkeypatch.setattr(SlackClient, "_create_service_client", lambda self: MagicMock())
+    return lambda: SlackClient(credentials={"bot_token": "test-token"})
+
+
+def _invocation_context(account_id):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(invoked_function_arn=f"arn:aws:lambda:us-east-1:{account_id}:function:test-function")
+
+
+def _account_header(client):
+    return client._create_lambda_header_block()[0]["elements"][0]["text"]
+
+
+def test_client_created_inside_handler_inherits_account(invocation_slack):
+    from nui_shared_utils.powertools_helpers import powertools_handler
+
+    @powertools_handler(service_name="test")
+    def handler(event, context):
+        return _account_header(invocation_slack())
+
+    assert "Production (123456789012)" in handler({}, _invocation_context("123456789012"))
+
+
+@pytest.mark.parametrize("reraise", [False, True])
+def test_reused_client_context_is_current_and_cleared(invocation_slack, reraise):
+    from nui_shared_utils.powertools_helpers import powertools_handler
+
+    client = invocation_slack()
+
+    @powertools_handler(service_name="test", reraise_exceptions=reraise)
+    def handler(event, context):
+        if event.get("fail"):
+            raise ValueError("handler failure")
+        return _account_header(client)
+
+    for account_id in ("123456789012", "234567890123"):
+        assert account_id in handler({}, _invocation_context(account_id))
+        assert account_id not in _account_header(client)
+    if reraise:
+        with pytest.raises(ValueError, match="handler failure"):
+            handler({"fail": True}, _invocation_context("123456789012"))
+    else:
+        assert handler({"fail": True}, _invocation_context("123456789012"))["statusCode"] == 500
+    assert "123456789012" not in _account_header(client)
+    assert "Unknown" in handler({}, object())
+
+
+def test_explicit_client_context_wins(invocation_slack):
+    from nui_shared_utils.powertools_helpers import powertools_handler
+
+    client = invocation_slack()
+    client.set_handler_context(_invocation_context("345678901234"))
+
+    @powertools_handler(service_name="test")
+    def handler(event, context):
+        return _account_header(client)
+
+    assert "Staging (345678901234)" in handler({}, _invocation_context("123456789012"))
+
+
+def test_nested_handler_restores_outer_context(invocation_slack):
+    from nui_shared_utils.powertools_helpers import powertools_handler
+
+    client = invocation_slack()
+
+    @powertools_handler(service_name="inner")
+    def inner(event, context):
+        return _account_header(client)
+
+    @powertools_handler(service_name="outer")
+    def outer(event, context):
+        assert "234567890123" in inner({}, _invocation_context("234567890123"))
+        return _account_header(client)
+
+    assert "123456789012" in outer({}, _invocation_context("123456789012"))
+    assert "123456789012" not in _account_header(client)
+
+
+def test_concurrent_handlers_keep_context_separate(invocation_slack):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from nui_shared_utils.powertools_helpers import powertools_handler
+
+    client = invocation_slack()
+    barrier = Barrier(2)
+
+    @powertools_handler(service_name="test", reraise_exceptions=True)
+    def handler(event, context):
+        barrier.wait(timeout=5)
+        return _account_header(client)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        accounts = ("123456789012", "234567890123")
+        results = list(pool.map(lambda account: handler({}, _invocation_context(account)), accounts))
+    for account, other_account, result in zip(accounts, reversed(accounts), results):
+        assert account in result
+        assert other_account not in result
+
+
+def test_decorator_alert_client_uses_current_context(invocation_slack, monkeypatch):
+    from nui_shared_utils import powertools_helpers
+
+    client = invocation_slack()
+    headers = []
+    monkeypatch.setattr(powertools_helpers, "SlackClient", lambda **kwargs: client)
+    monkeypatch.setattr(client, "send_message", lambda **kwargs: headers.append(_account_header(client)))
+
+    @powertools_helpers.powertools_handler(service_name="test", slack_alert_channel="#errors")
+    def handler(event, context):
+        raise ValueError("handler failure")
+
+    for account_id in ("123456789012", "234567890123"):
+        assert handler({}, _invocation_context(account_id))["statusCode"] == 500
+        assert account_id in headers[-1]
+        assert account_id not in _account_header(client)

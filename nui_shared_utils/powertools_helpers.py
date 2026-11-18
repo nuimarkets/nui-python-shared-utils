@@ -26,7 +26,7 @@ try:
 except ImportError:
     COLOREDLOGS_AVAILABLE = False
 
-from .lambda_helpers import get_lambda_environment_info
+from .lambda_helpers import _handler_context, get_lambda_environment_info
 
 # SlackClient is loaded lazily on first use to keep this module's import
 # cost low for callers that don't enable Slack alerting (it transitively
@@ -137,7 +137,7 @@ def get_powertools_logger(
     powertools_logger = Logger(
         service=service_name,
         level=level,
-        sampling_rate=1,
+        sampling_rate=float(os.getenv("POWERTOOLS_LOGGER_SAMPLE_RATE", "0")),
         datefmt="%Y-%m-%dT%H:%M:%SZ",
         utc=True,
     )
@@ -255,13 +255,10 @@ def powertools_handler(
 
         @functools.wraps(func)
         def wrapper(event: dict, context: Any) -> dict:
-            # Populate SlackClient account info from Lambda context ARN
-            if slack_client:
-                slack_client.set_handler_context(context)
-
             # Classify before the handler runs: it may consume or mutate event["Records"].
             is_sqs = _is_sqs_event(event)
 
+            context_token = _handler_context.set(context)
             try:
                 # Apply logger context injection
                 # Note: inject_lambda_context is added dynamically to logging.Logger (line 95)
@@ -315,6 +312,8 @@ def powertools_handler(
                     "statusCode": 500,
                     "body": "Internal Server Error",
                 }
+            finally:
+                _handler_context.reset(context_token)
 
         return wrapper
 
