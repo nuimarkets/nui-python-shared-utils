@@ -26,7 +26,7 @@ try:
 except ImportError:
     COLOREDLOGS_AVAILABLE = False
 
-from .lambda_helpers import _handler_context, get_lambda_environment_info
+from .lambda_helpers import _InvocationScope, _handler_context, get_lambda_environment_info
 
 # SlackClient is loaded lazily on first use to keep this module's import
 # cost low for callers that don't enable Slack alerting (it transitively
@@ -257,7 +257,8 @@ def powertools_handler(
             # Classify before the handler runs: it may consume or mutate event["Records"].
             is_sqs = _is_sqs_event(event)
 
-            context_token = _handler_context.set(context)
+            scope = _InvocationScope(context)
+            context_token = _handler_context.set(scope)
             try:
                 # Apply logger context injection
                 # Note: inject_lambda_context is added dynamically to logging.Logger (line 95)
@@ -312,6 +313,7 @@ def powertools_handler(
                     "body": "Internal Server Error",
                 }
             finally:
+                scope.active = False
                 _handler_context.reset(context_token)
 
         return wrapper

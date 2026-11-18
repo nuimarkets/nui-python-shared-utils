@@ -783,3 +783,130 @@ def test_decorator_alert_client_uses_current_context(invocation_slack, monkeypat
         assert handler({}, _invocation_context(account_id))["statusCode"] == 500
         assert account_id in headers[-1]
         assert account_id not in _account_header(client)
+
+
+def _routed_account_header(client):
+    return client._blocks_with_header(None, True, None)[0]["elements"][0]["text"]
+
+
+def test_local_alert_client_inherits_account(invocation_slack, monkeypatch):
+    from nui_shared_utils import powertools_helpers
+    from nui_shared_utils.slack_client import SlackClient
+
+    monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME")
+    transport = MagicMock()
+    transport.chat_postMessage.return_value = {"ok": True, "ts": "1", "channel": "C0"}
+    monkeypatch.setattr(SlackClient, "_create_service_client", lambda self: transport)
+    client = invocation_slack()
+    monkeypatch.setattr(powertools_helpers, "SlackClient", lambda **kwargs: client)
+
+    @powertools_helpers.powertools_handler(service_name="test", slack_alert_channel="#errors")
+    def handler(event, context):
+        raise ValueError("handler failure")
+
+    for account_id in ("123456789012", "234567890123"):
+        assert handler({}, _invocation_context(account_id))["statusCode"] == 500
+        header = transport.chat_postMessage.call_args.kwargs["blocks"][0]["elements"][0]["text"]
+        assert "Local Testing" in header
+        assert account_id in header
+        assert account_id not in _routed_account_header(client)
+
+
+@pytest.mark.parametrize("local", [False, True])
+@pytest.mark.parametrize("exit_mode", ["success", "handled", "raised"])
+def test_copied_context_expires_on_handler_exit(invocation_slack, monkeypatch, local, exit_mode):
+    from contextvars import copy_context
+
+    from nui_shared_utils.powertools_helpers import powertools_handler
+
+    if local:
+        monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME")
+    client = invocation_slack()
+    saved = []
+    active_headers = []
+
+    @powertools_handler(service_name="test", reraise_exceptions=exit_mode == "raised")
+    def handler(event, context):
+        saved.append(copy_context())
+        active_headers.append(saved[-1].run(_routed_account_header, client))
+        if exit_mode != "success":
+            raise ValueError("handler failure")
+        return "success"
+
+    if exit_mode == "raised":
+        with pytest.raises(ValueError, match="handler failure"):
+            handler({}, _invocation_context("123456789012"))
+    else:
+        result = handler({}, _invocation_context("123456789012"))
+        assert result == ("success" if exit_mode == "success" else {"statusCode": 500, "body": "Internal Server Error"})
+
+    assert "123456789012" in active_headers[0]
+    assert "123456789012" not in _routed_account_header(client)
+    assert "123456789012" not in saved[0].run(_routed_account_header, client)
+
+
+def test_nested_copied_contexts_have_independent_lifetimes(invocation_slack):
+    from contextvars import copy_context
+
+    from nui_shared_utils.powertools_helpers import powertools_handler
+
+    client = invocation_slack()
+    copies = {}
+    active_headers = []
+
+    @powertools_handler(service_name="inner")
+    def inner(event, context):
+        copies["inner"] = copy_context()
+        return "inner"
+
+    @powertools_handler(service_name="outer")
+    def outer(event, context):
+        copies["outer"] = copy_context()
+        result = inner({}, _invocation_context("234567890123"))
+        active_headers.extend(
+            [
+                _routed_account_header(client),
+                copies["outer"].run(_routed_account_header, client),
+                copies["inner"].run(_routed_account_header, client),
+            ]
+        )
+        return result
+
+    assert outer({}, _invocation_context("123456789012")) == "inner"
+    assert all("123456789012" in header for header in active_headers[:2])
+    assert "234567890123" not in active_headers[2]
+    for copied in copies.values():
+        assert "123456789012" not in copied.run(_routed_account_header, client)
+        assert "234567890123" not in copied.run(_routed_account_header, client)
+
+
+def test_copied_worker_context_expires_on_handler_exit(invocation_slack):
+    from concurrent.futures import ThreadPoolExecutor
+    from contextvars import copy_context
+    from threading import Event
+
+    from nui_shared_utils.powertools_helpers import powertools_handler
+
+    client = invocation_slack()
+    started, release = Event(), Event()
+
+    def render_after_exit():
+        started.set()
+        if not release.wait(timeout=5):
+            raise TimeoutError("worker was not released")
+        return _routed_account_header(client)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+
+        @powertools_handler(service_name="test", reraise_exceptions=True)
+        def handler(event, context):
+            future = pool.submit(copy_context().run, render_after_exit)
+            if not started.wait(timeout=5):
+                raise TimeoutError("worker did not start")
+            return future
+
+        try:
+            future = handler({}, _invocation_context("123456789012"))
+        finally:
+            release.set()
+        assert "123456789012" not in future.result(timeout=5)

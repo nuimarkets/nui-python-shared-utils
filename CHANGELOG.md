@@ -13,8 +13,9 @@ that contained them.
 - Lambda loggers respect the configured log level by disabling DEBUG sampling by default.
   Set `POWERTOOLS_LOGGER_SAMPLE_RATE` to opt into sampling.
 - `SlackClient` instances without explicit handler context inherit the current
-  `powertools_handler` invocation's account when rendering Lambda headers. Reused clients
-  resolve the current invocation, with context restored after nested calls and cleared on exit.
+  `powertools_handler` invocation's account when rendering Lambda or local headers. Reused
+  clients resolve the current invocation; inherited context expires on exit even in copied
+  execution contexts, and nested calls restore their caller's context.
 
 ## [2.5.1] - 2026-11-17
 

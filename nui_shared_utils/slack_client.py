@@ -256,6 +256,13 @@ class SlackClient(BaseClient, ServiceHealthMixin):
             "aws_account_name": self._account_names.get(account_id, "Unknown"),
         }
 
+    def _get_account_context(self) -> Dict[str, str]:
+        """Resolve account fields without retaining inherited invocation values."""
+        scope = _handler_context.get()
+        if not self._handler_context_set and scope is not None and scope.active:
+            return {**self._lambda_context, **self._account_context_from_handler(scope.context)}
+        return self._lambda_context
+
     def _get_default_config_prefix(self) -> str:
         """Return configuration prefix for Slack."""
         return "slack"
@@ -383,10 +390,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         Returns:
             List of Slack blocks for Lambda context
         """
-        # Resolve inherited account fields at render time for reused clients.
-        account_context = self._lambda_context
-        if not self._handler_context_set:
-            account_context = {**account_context, **self._account_context_from_handler(_handler_context.get())}
+        account_context = self._get_account_context()
         account_id = account_context["aws_account_id"]
         account_name = account_context["aws_account_name"]
         account_display = f"{account_name} ({account_id})" if account_id != "Unknown" else "Unknown"
@@ -422,8 +426,9 @@ class SlackClient(BaseClient, ServiceHealthMixin):
             username = "Unknown"
 
         timestamp = datetime.now(timezone.utc).strftime("%H:%M UTC")
-        account_id = self._lambda_context["aws_account_id"]
-        account_name = self._lambda_context["aws_account_name"]
+        account_context = self._get_account_context()
+        account_id = account_context["aws_account_id"]
+        account_name = account_context["aws_account_name"]
         account_display = f"{account_name} ({account_id})" if account_id != "Unknown" else "Unknown"
 
         line1 = f"👤 `Local Testing` • {username}"

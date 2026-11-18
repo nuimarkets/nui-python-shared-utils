@@ -194,13 +194,14 @@ def powertools_handler(
 ### Slack Account Context
 
 During a decorated invocation, any `SlackClient` without an explicit context uses
-that invocation's ARN to resolve the account in Lambda headers. This includes clients
+that invocation's ARN to resolve the account in Lambda and local headers. This includes clients
 created before the handler and clients created inside it, with or without
 `slack_alert_channel`. Each client's own account-name mapping determines the display name.
 Calling `client.set_handler_context(context)` overrides inherited context for that client.
 Inherited context is restored after nested handlers and cleared when the invocation ends,
 including failures; concurrent calls keep separate context. A new worker thread needs
 Python's `contextvars.copy_context()` to propagate the calling thread's context.
+Copied contexts stop inheriting that invocation's account when the handler exits.
 
 ### When the Handler Raises
 
