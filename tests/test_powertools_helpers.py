@@ -52,7 +52,6 @@ class TestGetPowertoolsLogger:
                 mock_logger_class.assert_called_once_with(
                     service="test-service",
                     level="INFO",
-                    sampling_rate=0,
                     datefmt="%Y-%m-%dT%H:%M:%SZ",
                     utc=True,
                 )
@@ -600,7 +599,7 @@ class TestOptionalImports:
             assert isinstance(logger, logging.Logger)
 
 
-@pytest.mark.parametrize("sample_rate, expect_debug", [(None, False), ("0", False), ("1", True)])
+@pytest.mark.parametrize("sample_rate, expect_debug", [(None, False), ("", False), ("0", False), ("1", True)])
 def test_lambda_logger_respects_sampling(monkeypatch, capsys, sample_rate, expect_debug):
     """Exercise real Powertools output, including context injection on warm calls."""
     from types import SimpleNamespace
@@ -709,6 +708,23 @@ def test_explicit_client_context_wins(invocation_slack):
         return _account_header(client)
 
     assert "Staging (345678901234)" in handler({}, _invocation_context("123456789012"))
+
+
+def test_invalid_explicit_context_keeps_inheritance(invocation_slack):
+    from nui_shared_utils.powertools_helpers import powertools_handler
+
+    client = invocation_slack()
+    for context in (None, object(), _invocation_context("123456789012")):
+        # The last stub deliberately carries a malformed ARN.
+        if hasattr(context, "invoked_function_arn"):
+            context.invoked_function_arn = "invalid"
+        client.set_handler_context(context)
+
+    @powertools_handler(service_name="test")
+    def handler(event, context):
+        return _account_header(client)
+
+    assert "Production (123456789012)" in handler({}, _invocation_context("123456789012"))
 
 
 def test_nested_handler_restores_outer_context(invocation_slack):

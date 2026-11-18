@@ -137,7 +137,6 @@ def get_powertools_logger(
     powertools_logger = Logger(
         service=service_name,
         level=level,
-        sampling_rate=float(os.getenv("POWERTOOLS_LOGGER_SAMPLE_RATE", "0")),
         datefmt="%Y-%m-%dT%H:%M:%SZ",
         utc=True,
     )

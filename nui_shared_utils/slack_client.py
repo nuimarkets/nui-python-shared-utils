@@ -233,8 +233,10 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         Args:
             context: Lambda context object (second arg to handler)
         """
-        self._handler_context_set = True
-        self._lambda_context.update(self._account_context_from_handler(context))
+        account_context = self._account_context_from_handler(context)
+        if account_context:
+            self._handler_context_set = True
+            self._lambda_context.update(account_context)
 
     def _account_context_from_handler(self, context: Any) -> Dict[str, str]:
         """Resolve account display fields from a Lambda invocation ARN."""
