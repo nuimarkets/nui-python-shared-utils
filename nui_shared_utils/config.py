@@ -34,13 +34,7 @@ class Config:
             slack_credentials_secret: AWS secret name for Slack credentials
             aws_region: AWS region for secrets/services
         """
-        # Elasticsearch settings. An es_host passed here outranks a host carried in a
-        # credentials secret; the env-derived and built-in values do not.
-        self._es_host_explicit = es_host is not None
-        if es_host is not None:
-            self.es_host = es_host
-        else:
-            self.es_host = os.environ.get("ES_HOST") or os.environ.get("ELASTICSEARCH_HOST") or "localhost:9200"
+        self.es_host = es_host
 
         if es_credentials_secret is not None:
             self.es_credentials_secret = es_credentials_secret
@@ -72,6 +66,27 @@ class Config:
             self.aws_region = aws_region
         else:
             self.aws_region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
+
+    @property
+    def es_host(self) -> str:
+        """Elasticsearch host; assigning a value gives it explicit config priority."""
+        return self.__dict__["es_host"]
+
+    @es_host.setter
+    def es_host(self, value: Optional[str]) -> None:
+        """Set a host explicitly, or reset to environment/default behavior with None."""
+        self._es_host_explicit = value is not None
+        # Keep the instance key so attribute patchers save and restore a local value.
+        self.__dict__["es_host"] = (
+            value
+            if value is not None
+            else os.environ.get("ES_HOST") or os.environ.get("ELASTICSEARCH_HOST") or "localhost:9200"
+        )
+
+    @es_host.deleter
+    def es_host(self) -> None:
+        """Reset host priority when the attribute is deleted."""
+        self.es_host = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Return configuration as dictionary for debugging/logging."""

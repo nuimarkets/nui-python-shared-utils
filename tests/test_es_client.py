@@ -366,11 +366,13 @@ class TestStreamingBulk:
         mock_es.return_value = Mock()
 
         # Simulate 3 successful documents
-        mock_streaming_bulk.return_value = iter([
-            (True, {"index": {"_index": "test-index", "_id": "1"}}),
-            (True, {"index": {"_index": "test-index", "_id": "2"}}),
-            (True, {"index": {"_index": "test-index", "_id": "3"}}),
-        ])
+        mock_streaming_bulk.return_value = iter(
+            [
+                (True, {"index": {"_index": "test-index", "_id": "1"}}),
+                (True, {"index": {"_index": "test-index", "_id": "2"}}),
+                (True, {"index": {"_index": "test-index", "_id": "3"}}),
+            ]
+        )
 
         client = ElasticsearchClient()
 
@@ -392,11 +394,13 @@ class TestStreamingBulk:
         mock_es.return_value = Mock()
 
         # Simulate 2 successes and 1 failure
-        mock_streaming_bulk.return_value = iter([
-            (True, {"index": {"_index": "test-index", "_id": "1"}}),
-            (False, {"index": {"_index": "test-index", "_id": "2", "error": {"type": "mapper_parsing_exception"}}}),
-            (True, {"index": {"_index": "test-index", "_id": "3"}}),
-        ])
+        mock_streaming_bulk.return_value = iter(
+            [
+                (True, {"index": {"_index": "test-index", "_id": "1"}}),
+                (False, {"index": {"_index": "test-index", "_id": "2", "error": {"type": "mapper_parsing_exception"}}}),
+                (True, {"index": {"_index": "test-index", "_id": "3"}}),
+            ]
+        )
 
         client = ElasticsearchClient()
 
@@ -418,10 +422,12 @@ class TestStreamingBulk:
         mock_es.return_value = Mock()
 
         # Simulate all failures
-        mock_streaming_bulk.return_value = iter([
-            (False, {"index": {"_index": "test-index", "_id": "1", "error": {"type": "validation_exception"}}}),
-            (False, {"index": {"_index": "test-index", "_id": "2", "error": {"type": "validation_exception"}}}),
-        ])
+        mock_streaming_bulk.return_value = iter(
+            [
+                (False, {"index": {"_index": "test-index", "_id": "1", "error": {"type": "validation_exception"}}}),
+                (False, {"index": {"_index": "test-index", "_id": "2", "error": {"type": "validation_exception"}}}),
+            ]
+        )
 
         client = ElasticsearchClient()
 
@@ -673,6 +679,73 @@ class TestElasticsearchHostResolution:
         with patch("nui_shared_utils.secrets_helper.get_config", return_value=Config(es_host="es-configured:9200")):
             assert self._client_url(secret) == "http://es-configured:9200"
             assert self._helper_host(secret) == "es-configured:9200"
+
+    def test_assigned_host_beats_credentials_host(self):
+        from nui_shared_utils.config import get_config
+
+        get_config().es_host = "es-assigned:9201"
+        secret = {"host": "es-from-secret:9200", "password": "pw"}
+
+        assert self._client_url(secret) == "http://es-assigned:9201"
+        assert self._helper_host(secret) == "es-assigned:9201"
+        assert self._client_url(secret, credentials=secret) == "http://es-assigned:9201"
+        assert self._client_url(secret, host="es-argument:9202") == "http://es-argument:9202"
+
+    @pytest.mark.parametrize("env_var", ["ES_HOST", "ELASTICSEARCH_HOST"])
+    def test_env_host_beats_assigned_host(self, monkeypatch, env_var):
+        from nui_shared_utils.config import get_config
+
+        get_config().es_host = "es-assigned:9201"
+        monkeypatch.setenv(env_var, "es-from-env:9200")
+        secret = {"host": "es-from-secret:9200", "password": "pw"}
+
+        assert self._client_url(secret) == "http://es-from-env:9200"
+        assert self._helper_host(secret) == "es-from-env:9200"
+
+    @pytest.mark.parametrize("env_host", [None, "es-env-at-reset:9200"])
+    def test_assigning_none_resets_host_priority(self, monkeypatch, env_host):
+        from nui_shared_utils.config import get_config
+
+        config = get_config()
+        config.es_host = "es-assigned:9201"
+        if env_host:
+            monkeypatch.setenv("ES_HOST", env_host)
+        config.es_host = None
+        if env_host:
+            monkeypatch.delenv("ES_HOST")
+
+        assert config.es_host == (env_host or "localhost:9200")
+        secret = {"host": "es-from-secret:9200", "password": "pw"}
+        assert self._client_url(secret) == "http://es-from-secret:9200"
+        assert self._helper_host(secret) == "es-from-secret:9200"
+
+    @pytest.mark.parametrize("initial_host", [None, "es-original:9200"])
+    def test_patch_object_restores_host_value(self, initial_host):
+        from nui_shared_utils.config import Config, set_config
+
+        config = Config(es_host=initial_host)
+        set_config(config)
+        original_host = config.es_host
+        with patch.object(config, "es_host", "es-temporary:9201"):
+            assert config.es_host == "es-temporary:9201"
+
+        assert config.es_host == original_host
+        # Restoring a saved value is itself an explicit assignment.
+        secret = {"host": "es-from-secret:9200", "password": "pw"}
+        assert self._client_url(secret) == f"http://{original_host}"
+        assert self._helper_host(secret) == original_host
+
+    def test_deleting_assigned_host_resets_priority(self):
+        from nui_shared_utils.config import get_config
+
+        config = get_config()
+        config.es_host = "es-assigned:9201"
+        del config.es_host
+
+        assert config.es_host == "localhost:9200"
+        secret = {"host": "es-from-secret:9200", "password": "pw"}
+        assert self._client_url(secret) == "http://es-from-secret:9200"
+        assert self._helper_host(secret) == "es-from-secret:9200"
 
     def test_env_host_beats_configured_host(self, monkeypatch):
         from nui_shared_utils.config import Config

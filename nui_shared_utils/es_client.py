@@ -64,8 +64,8 @@ class ElasticsearchClient(BaseClient, ServiceHealthMixin):
 
     def _create_service_client(self) -> Elasticsearch:
         """Create Elasticsearch client with resolved configuration."""
-        # Host precedence: constructor arg > ES_HOST/ELASTICSEARCH_HOST > configure(es_host=...)
-        # > credentials "host" (e.g. from the secret) > default. Shared with get_elasticsearch_credentials.
+        # Host precedence: constructor arg > ES_HOST/ELASTICSEARCH_HOST > explicit config host
+        # > credentials "host" > default. _resolve_es_host defines the shared config-host tier.
         if self._host_override is not None:
             host = self._host_override
         else:
@@ -82,7 +82,7 @@ class ElasticsearchClient(BaseClient, ServiceHealthMixin):
         # Get credentials
         username = self.credentials.get("username", "elastic")
         password = self.credentials.get("password")
-        
+
         if not password:
             raise ValueError("Elasticsearch credentials must include 'password'")
 
@@ -122,91 +122,69 @@ class ElasticsearchClient(BaseClient, ServiceHealthMixin):
         Returns:
             List of hit documents
         """
+
         def _search_operation():
             response = self._service_client.search(
-                index=index,
-                body=self._body_with_size(body, size),
-                ignore_unavailable=True
+                index=index, body=self._body_with_size(body, size), ignore_unavailable=True
             )
             return [hit["_source"] for hit in response["hits"]["hits"]]
 
-        return self._execute_with_error_handling(
-            "search",
-            _search_operation,
-            index=index,
-            size=size
-        )
+        return self._execute_with_error_handling("search", _search_operation, index=index, size=size)
 
     @handle_client_errors(default_return={})
     def aggregate(self, index: str, body: Dict) -> Dict[str, Any]:
         """
         Execute aggregation query with error handling.
-        
+
         Args:
             index: Index pattern to search
             body: Elasticsearch query body with aggregations
-            
+
         Returns:
             Aggregation results
         """
+
         def _aggregate_operation():
             response = self._service_client.search(
-                index=index,
-                body=self._body_with_size(body, 0),  # Only need aggregations
-                ignore_unavailable=True
+                index=index, body=self._body_with_size(body, 0), ignore_unavailable=True  # Only need aggregations
             )
             return response.get("aggregations", {})
 
-        return self._execute_with_error_handling(
-            "aggregate",
-            _aggregate_operation,
-            index=index
-        )
+        return self._execute_with_error_handling("aggregate", _aggregate_operation, index=index)
 
     @handle_client_errors(default_return=0)
     def count(self, index: str, body: Optional[Dict[str, Any]] = None) -> int:
         """
         Count documents with error handling.
-        
+
         Args:
             index: Index pattern to search
             body: Optional query body
-            
+
         Returns:
             Document count
         """
+
         def _count_operation():
-            response = self._service_client.count(
-                index=index,
-                body=body,
-                ignore_unavailable=True
-            )
+            response = self._service_client.count(index=index, body=body, ignore_unavailable=True)
             return response.get("count", 0)
 
-        return self._execute_with_error_handling(
-            "count",
-            _count_operation,
-            index=index
-        )
+        return self._execute_with_error_handling("count", _count_operation, index=index)
 
     @handle_client_errors(default_return={})
-    def get_service_stats(
-        self,
-        service: str,
-        hours: int = 24,
-        index_prefix: str = "logs"
-    ) -> Dict[str, Any]:
+    def get_service_stats(self, service: str, hours: int = 24, index_prefix: str = "logs") -> Dict[str, Any]:
         """
         Get comprehensive service statistics.
-        
+
         Args:
             service: Service name
             hours: Time window to analyze
             index_prefix: Index prefix pattern
-            
+
         Returns:
             Dictionary with service statistics
         """
+
         def _stats_operation():
             now = datetime.utcnow()
             start_time = now - timedelta(hours=hours)
@@ -216,35 +194,17 @@ class ElasticsearchClient(BaseClient, ServiceHealthMixin):
             body = {
                 "query": {
                     "bool": {
-                        "filter": [{
-                            "range": {
-                                "@timestamp": {
-                                    "gte": start_time.isoformat(),
-                                    "lte": now.isoformat()
-                                }
-                            }
-                        }]
+                        "filter": [{"range": {"@timestamp": {"gte": start_time.isoformat(), "lte": now.isoformat()}}}]
                     }
                 },
                 "aggs": {
-                    "total": {
-                        "cardinality": {"field": "request_id.keyword"}
-                    },
+                    "total": {"cardinality": {"field": "request_id.keyword"}},
                     "errors": {
                         "filter": {"range": {"response_code": {"gte": 400}}},
-                        "aggs": {
-                            "count": {
-                                "cardinality": {"field": "request_id.keyword"}
-                            }
-                        }
+                        "aggs": {"count": {"cardinality": {"field": "request_id.keyword"}}},
                     },
-                    "response_times": {
-                        "percentiles": {
-                            "field": "response_time",
-                            "percents": [50, 95, 99]
-                        }
-                    }
-                }
+                    "response_times": {"percentiles": {"field": "response_time", "percents": [50, 95, 99]}},
+                },
             }
 
             aggs = self.aggregate(index, body)
@@ -264,33 +224,25 @@ class ElasticsearchClient(BaseClient, ServiceHealthMixin):
                 "p99_response_time": percentiles.get("99.0", 0),
             }
 
-        return self._execute_with_error_handling(
-            "get_service_stats",
-            _stats_operation,
-            service=service,
-            hours=hours
-        )
+        return self._execute_with_error_handling("get_service_stats", _stats_operation, service=service, hours=hours)
 
     @handle_client_errors(default_return=[])
     def get_recent_errors(
-        self,
-        service: str,
-        hours: int = 1,
-        limit: int = 10,
-        index_prefix: str = "logs"
+        self, service: str, hours: int = 1, limit: int = 10, index_prefix: str = "logs"
     ) -> List[Dict]:
         """
         Get recent error logs for a service.
-        
+
         Args:
             service: Service name
             hours: Time window
             limit: Maximum number of errors
             index_prefix: Index prefix
-            
+
         Returns:
             List of recent error documents
         """
+
         def _errors_operation():
             now = datetime.utcnow()
             start_time = now - timedelta(hours=hours)
@@ -300,31 +252,18 @@ class ElasticsearchClient(BaseClient, ServiceHealthMixin):
                 "query": {
                     "bool": {
                         "filter": [
-                            {
-                                "range": {
-                                    "@timestamp": {
-                                        "gte": start_time.isoformat(),
-                                        "lte": now.isoformat()
-                                    }
-                                }
-                            },
-                            {
-                                "range": {"response_code": {"gte": 400}}
-                            }
+                            {"range": {"@timestamp": {"gte": start_time.isoformat(), "lte": now.isoformat()}}},
+                            {"range": {"response_code": {"gte": 400}}},
                         ]
                     }
                 },
-                "sort": [{"@timestamp": {"order": "desc"}}]
+                "sort": [{"@timestamp": {"order": "desc"}}],
             }
 
             return self.search(index, body, size=limit)
 
         return self._execute_with_error_handling(
-            "get_recent_errors",
-            _errors_operation,
-            service=service,
-            hours=hours,
-            limit=limit
+            "get_recent_errors", _errors_operation, service=service, hours=hours, limit=limit
         )
 
     def _perform_health_check(self):
@@ -334,26 +273,26 @@ class ElasticsearchClient(BaseClient, ServiceHealthMixin):
             info = self._service_client.info()
             if not info.get("version"):
                 raise Exception("Elasticsearch info response invalid")
-                
+
             # Check cluster health
             health = self._service_client.cluster.health()
             if health.get("status") == "red":
                 raise Exception(f"Elasticsearch cluster is red: {health}")
-                
+
         except Exception as e:
             raise Exception(f"Elasticsearch health check failed: {e}")
 
     def get_cluster_info(self) -> Dict:
         """
         Get Elasticsearch cluster information.
-        
+
         Returns:
             Cluster info dictionary
         """
         try:
             info = self._service_client.info()
             health = self._service_client.cluster.health()
-            
+
             return {
                 "version": info.get("version", {}).get("number"),
                 "cluster_name": info.get("cluster_name"),
@@ -378,21 +317,16 @@ class ElasticsearchClient(BaseClient, ServiceHealthMixin):
         Returns:
             List of index information dictionaries
         """
+
         def _indices_operation():
             response = self._service_client.cat.indices(
-                index=pattern,
-                format="json",
-                h="index,health,status,docs.count,store.size"
+                index=pattern, format="json", h="index,health,status,docs.count,store.size"
             )
             # 8.x/9.x return a response wrapper around the JSON array; normalise to
             # a plain list so callers get the same type on every client major.
             return list(response) if response else []
 
-        return self._execute_with_error_handling(
-            "get_indices_info",
-            _indices_operation,
-            pattern=pattern
-        )
+        return self._execute_with_error_handling("get_indices_info", _indices_operation, pattern=pattern)
 
     def streaming_bulk(
         self,
@@ -400,7 +334,7 @@ class ElasticsearchClient(BaseClient, ServiceHealthMixin):
         chunk_size: int = 100,
         max_retries: int = 2,
         raise_on_error: bool = False,
-        **kwargs
+        **kwargs,
     ) -> Tuple[int, int]:
         """
         Stream documents to Elasticsearch with error handling.
@@ -441,7 +375,7 @@ class ElasticsearchClient(BaseClient, ServiceHealthMixin):
                 chunk_size=chunk_size,
                 max_retries=max_retries,
                 raise_on_error=raise_on_error,
-                **kwargs
+                **kwargs,
             ):
                 if ok:
                     success_count += 1
@@ -455,18 +389,18 @@ class ElasticsearchClient(BaseClient, ServiceHealthMixin):
                             **context,
                             "index": error_info.get("_index", "unknown"),
                             "error": error_info.get("error", "unknown"),
-                        }
+                        },
                     )
         except Exception as e:
             log.error(
                 f"streaming_bulk failed: {e}",
-                extra={**context, "error_type": type(e).__name__, "error_message": str(e)}
+                extra={**context, "error_type": type(e).__name__, "error_message": str(e)},
             )
             if raise_on_error:
                 raise
 
         log.debug(
             f"streaming_bulk completed: {success_count} successful, {failure_count} failed",
-            extra={**context, "success_count": success_count, "failure_count": failure_count}
+            extra={**context, "success_count": success_count, "failure_count": failure_count},
         )
         return success_count, failure_count

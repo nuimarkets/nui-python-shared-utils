@@ -5,7 +5,7 @@ Tests for db_client module.
 import os
 import pytest
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("clear_database_env")]
 from unittest.mock import patch, Mock, MagicMock
 import time
 import pymysql
@@ -27,7 +27,7 @@ def create_mock_cursor_cm(mock_cursor):
 class TestDatabaseClient:
     """Tests for DatabaseClient class."""
 
-    @patch("nui_shared_utils.db_client.get_database_credentials")
+    @patch("nui_shared_utils.secrets_helper.get_secret")
     def test_init_default_values(self, mock_get_creds):
         """Test initialization with default values."""
         mock_get_creds.return_value = {
@@ -46,7 +46,7 @@ class TestDatabaseClient:
         assert client.pool_recycle == 3600
         assert client._pool_key == "db.example.com:3306"
 
-    @patch("nui_shared_utils.db_client.get_database_credentials")
+    @patch("nui_shared_utils.secrets_helper.get_secret")
     def test_init_custom_values(self, mock_get_creds):
         """Test initialization with custom values."""
         mock_get_creds.return_value = {
@@ -68,7 +68,7 @@ class TestDatabaseClient:
 class TestGetConnection:
     """Tests for get_connection context manager."""
 
-    @patch("nui_shared_utils.db_client.get_database_credentials")
+    @patch("nui_shared_utils.secrets_helper.get_secret")
     @patch("nui_shared_utils.db_client.safe_close_connection")
     @patch("pymysql.connect")
     def test_get_connection_success(self, mock_connect, mock_safe_close, mock_get_creds):
@@ -102,7 +102,7 @@ class TestGetConnection:
         )
         mock_safe_close.assert_called_once_with(mock_conn)
 
-    @patch("nui_shared_utils.db_client.get_database_credentials")
+    @patch("nui_shared_utils.secrets_helper.get_secret")
     @patch("pymysql.connect")
     def test_get_connection_custom_database(self, mock_connect, mock_get_creds):
         """Test connection with custom database."""
@@ -124,7 +124,7 @@ class TestGetConnection:
         # Should use custom database instead of default
         assert mock_connect.call_args[1]["database"] == "customdb"
 
-    @patch("nui_shared_utils.db_client.get_database_credentials")
+    @patch("nui_shared_utils.secrets_helper.get_secret")
     @patch("pymysql.connect")
     def test_get_connection_error_handling(self, mock_connect, mock_get_creds):
         """Test connection error handling."""
@@ -148,7 +148,7 @@ class TestGetConnection:
 class TestQuery:
     """Tests for query method."""
 
-    @patch("nui_shared_utils.db_client.get_database_credentials")
+    @patch("nui_shared_utils.secrets_helper.get_secret")
     def test_query_success(self, mock_get_creds):
         """Test successful query execution."""
         mock_get_creds.return_value = {
@@ -176,7 +176,7 @@ class TestQuery:
         assert results[0]["name"] == "Test 1"
         mock_cursor.execute.assert_called_once_with("SELECT * FROM test_table", None)
 
-    @patch("nui_shared_utils.db_client.get_database_credentials")
+    @patch("nui_shared_utils.secrets_helper.get_secret")
     def test_query_with_params(self, mock_get_creds):
         """Test query with parameters."""
         mock_get_creds.return_value = {
@@ -204,7 +204,7 @@ class TestQuery:
             "SELECT * FROM users WHERE status = %s AND age > %s", ("active", 18)
         )
 
-    @patch("nui_shared_utils.db_client.get_database_credentials")
+    @patch("nui_shared_utils.secrets_helper.get_secret")
     def test_query_error_handling(self, mock_get_creds):
         """Test query error handling."""
         mock_get_creds.return_value = {
@@ -228,7 +228,7 @@ class TestQuery:
 class TestExecute:
     """Tests for execute method."""
 
-    @patch("nui_shared_utils.db_client.get_database_credentials")
+    @patch("nui_shared_utils.secrets_helper.get_secret")
     def test_execute_success(self, mock_get_creds):
         """Test successful execute operation."""
         mock_get_creds.return_value = {
@@ -256,7 +256,7 @@ class TestExecute:
         mock_cursor.execute.assert_called_once_with("UPDATE users SET status = %s", ("active",))
         mock_conn.commit.assert_called_once()
 
-    @patch("nui_shared_utils.db_client.get_database_credentials")
+    @patch("nui_shared_utils.secrets_helper.get_secret")
     def test_execute_error_raises(self, mock_get_creds):
         """Test execute error propagation."""
         mock_get_creds.return_value = {
@@ -281,7 +281,7 @@ class TestExecute:
 class TestBulkInsert:
     """Tests for bulk_insert method."""
 
-    @patch("nui_shared_utils.db_client.get_database_credentials")
+    @patch("nui_shared_utils.secrets_helper.get_secret")
     def test_bulk_insert_success(self, mock_get_creds):
         """Test successful bulk insert."""
         mock_get_creds.return_value = {
@@ -328,7 +328,7 @@ class TestBulkInsert:
         actual_values = mock_cursor.executemany.call_args[0][1]
         assert actual_values == expected_values
 
-    @patch("nui_shared_utils.db_client.get_database_credentials")
+    @patch("nui_shared_utils.secrets_helper.get_secret")
     def test_bulk_insert_batching(self, mock_get_creds):
         """Test bulk insert with batching."""
         mock_get_creds.return_value = {
@@ -359,7 +359,7 @@ class TestBulkInsert:
         assert mock_cursor.executemany.call_count == 3
         assert inserted == 6  # 2 + 2 + 2 (mocked rowcount)
 
-    @patch("nui_shared_utils.db_client.get_database_credentials")
+    @patch("nui_shared_utils.secrets_helper.get_secret")
     def test_bulk_insert_empty_records(self, mock_get_creds):
         """Test bulk insert with empty records."""
         mock_get_creds.return_value = {
@@ -376,7 +376,7 @@ class TestBulkInsert:
 
         assert inserted == 0
 
-    @patch("nui_shared_utils.db_client.get_database_credentials")
+    @patch("nui_shared_utils.secrets_helper.get_secret")
     def test_bulk_insert_ignore_duplicates(self, mock_get_creds):
         """Test bulk insert with ignore duplicates."""
         mock_get_creds.return_value = {
@@ -571,7 +571,7 @@ class TestSafeCloseConnection:
 class TestDatabaseCredentialResolution:
     """Tests for DatabaseClient credential resolution precedence."""
 
-    @patch("nui_shared_utils.db_client.get_database_credentials")
+    @patch("nui_shared_utils.secrets_helper.get_secret")
     def test_explicit_credentials_bypass_secrets_manager(self, mock_get_creds):
         """Explicit credentials dict should skip SM entirely."""
         creds = {
@@ -587,7 +587,7 @@ class TestDatabaseCredentialResolution:
         assert client.credentials == creds
         assert client._pool_key == "direct-host:3306"
 
-    @patch("nui_shared_utils.db_client.get_database_credentials")
+    @patch("nui_shared_utils.secrets_helper.get_secret")
     @patch.dict("os.environ", {"DB_HOST": "env-host", "DB_PASSWORD": "env-pass"}, clear=False)
     def test_env_vars_bypass_secrets_manager(self, mock_get_creds):
         """DB_HOST + DB_PASSWORD env vars should skip SM."""
@@ -605,14 +605,18 @@ class TestDatabaseCredentialResolution:
         assert client.credentials["username"] == "root"  # default
         assert client.credentials["database"] == "app"  # default
 
-    @patch("nui_shared_utils.db_client.get_database_credentials")
-    @patch.dict("os.environ", {
-        "DB_HOST": "env-host",
-        "DB_PASSWORD": "env-pass",
-        "DB_PORT": "3307",
-        "DB_USERNAME": "env-user",
-        "DB_DATABASE": "env-db",
-    }, clear=False)
+    @patch("nui_shared_utils.secrets_helper.get_secret")
+    @patch.dict(
+        "os.environ",
+        {
+            "DB_HOST": "env-host",
+            "DB_PASSWORD": "env-pass",
+            "DB_PORT": "3307",
+            "DB_USERNAME": "env-user",
+            "DB_DATABASE": "env-db",
+        },
+        clear=False,
+    )
     def test_env_vars_custom_values(self, _mock_get_creds):
         """All DB env vars should be picked up when set."""
         client = DatabaseClient()
@@ -623,7 +627,7 @@ class TestDatabaseCredentialResolution:
         assert client.credentials["password"] == "env-pass"
         assert client.credentials["database"] == "env-db"
 
-    @patch("nui_shared_utils.db_client.get_database_credentials")
+    @patch("nui_shared_utils.secrets_helper.get_secret")
     @patch.dict("os.environ", {"DB_HOST": "env-host", "DB_PASSWORD": "env-pass"}, clear=False)
     def test_explicit_credentials_win_over_env_vars(self, mock_get_creds):
         """Explicit credentials should take priority over env vars."""
@@ -639,7 +643,7 @@ class TestDatabaseCredentialResolution:
         mock_get_creds.assert_not_called()
         assert client.credentials["host"] == "explicit-host"
 
-    @patch("nui_shared_utils.db_client.get_database_credentials")
+    @patch("nui_shared_utils.secrets_helper.get_secret")
     @patch.dict("os.environ", {}, clear=False)
     def test_falls_through_to_secrets_manager(self, mock_get_creds):
         """Without explicit creds or env vars, should use SM."""
@@ -658,7 +662,35 @@ class TestDatabaseCredentialResolution:
         mock_get_creds.assert_called_once_with("test-db-secret")
         assert client.credentials["host"] == "sm-host"
 
-    @patch("nui_shared_utils.db_client.get_database_credentials")
+    @pytest.mark.parametrize("host_key", ["host", "endpoint", "hostname"])
+    def test_secrets_manager_hook_does_not_resolve_env_again(self, monkeypatch, host_key):
+        from nui_shared_utils.secrets_helper import get_database_credentials
+
+        client = DatabaseClient(credentials={"host": "initial-host", "port": 3306})
+        monkeypatch.setenv("DB_HOST", "env-host")
+        monkeypatch.setenv("DB_PASSWORD", "env-password")
+        secret = {host_key: "secret-host", "user": "secret-user", "password": "secret-password"}
+        with patch("nui_shared_utils.secrets_helper.get_secret", return_value=secret) as get_secret:
+            result = client._fetch_credentials_from_sm("database-secret")
+            assert result == {
+                "host": "secret-host",
+                "port": 3306,
+                "username": "secret-user",
+                "password": "secret-password",
+                "database": "app",
+            }
+            get_secret.assert_called_once_with("database-secret")
+
+            assert get_database_credentials("other-secret") == {
+                "host": "env-host",
+                "port": 3306,
+                "username": "root",
+                "password": "env-password",
+                "database": "app",
+            }
+            get_secret.assert_called_once_with("database-secret")
+
+    @patch("nui_shared_utils.secrets_helper.get_secret")
     @patch.dict("os.environ", {"DB_HOST": "env-host"}, clear=False)
     def test_env_vars_require_both_host_and_password(self, mock_get_creds):
         """Only DB_HOST without DB_PASSWORD should fall through to SM."""

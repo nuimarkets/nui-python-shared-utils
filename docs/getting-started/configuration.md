@@ -14,7 +14,8 @@ The package uses a hierarchical configuration system with the following priority
 
 All clients (Slack, Elasticsearch, Database) resolve credentials in this order:
 
-1. **Explicit `credentials` dict** - Passed to constructor, skips everything else
+1. **Explicit `credentials` dict** - Passed to constructor, skips other credential sources;
+   an Elasticsearch `host` key still follows the host order below
 2. **Credential environment variables** - Per-client env vars, skips Secrets Manager
 3. **AWS Secrets Manager** - Default behavior (unchanged)
 
@@ -24,11 +25,29 @@ they return those values without calling Secrets Manager. `get_database_credenti
 MySQL defaults; `PostgreSQLClient` applies the PostgreSQL ones on both the env and the secret path.
 
 The Elasticsearch host resolves as: the client's `host` argument, then `ES_HOST` (or
-`ELASTICSEARCH_HOST`), then a host set with `nui.configure(es_host=...)`, then the secret's
-`host` field, then the built-in default
+`ELASTICSEARCH_HOST`), then an explicit config host set with `nui.configure(es_host=...)`,
+`Config(es_host=...)` or `get_config().es_host = ...`, then the secret's `host` field, then the built-in default
 (`localhost:9200`). The client and `get_elasticsearch_credentials` use the same order. A `host`
 key in an explicit `credentials` dict ranks where the secret's does, so to pin one client's host
 pass `host=` instead.
+
+Assigning `None` to `get_config().es_host` resets it to the current host environment variable
+or `localhost:9200` and removes its explicit config priority. Deleting the attribute does the
+same. Every non-`None` assignment is explicit, including writing back a saved or default
+value. To restore the complete config state after a temporary override, keep the saved
+`Config` object unchanged and apply the override through `configure`, which creates a
+separate config object:
+
+```python
+from nui_shared_utils.config import configure, get_config, set_config
+
+saved_config = get_config()
+try:
+    configure(es_host="temporary-host:9200")
+    # Use the temporary configuration here.
+finally:
+    set_config(saved_config)
+```
 
 ## Environment Variables
 
@@ -176,7 +195,7 @@ The package expects AWS secrets in specific JSON formats:
 **Optional Fields:**
 
 - `host` - Used when the credentials come from this secret (no `ES_PASSWORD` or `ES_PASS`) and
-  no `host=` argument, `ES_HOST`, `ELASTICSEARCH_HOST` or `configure(es_host=...)` names one
+  no `host=` argument, `ES_HOST`, `ELASTICSEARCH_HOST` or explicit config host names one
 - `username` - Defaults to "elastic" if not provided
 
 #### Database Credentials

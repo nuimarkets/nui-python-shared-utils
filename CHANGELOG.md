@@ -68,6 +68,13 @@ This patch release includes a breaking credential-resolution change.
 
 ### Fixed
 
+- Assigning `get_config().es_host` gives the host explicit config priority above a credentials
+  host and below host environment variables or the client's `host` argument. Assigning `None`
+  (or deleting the attribute) resets it to the current environment/default value and removes
+  explicit priority. Writing back a saved or default string counts as an explicit assignment.
+- `DatabaseClient` fetches Secrets Manager credentials without rechecking environment variables
+  after selecting the store tier, matching `PostgreSQLClient`. The public
+  `get_database_credentials` helper keeps its environment-first behavior.
 - `PostgreSQLClient` given a secret with no `port` or `database` fills PostgreSQL defaults
   (`5432`, `postgres`) instead of the MySQL ones (`3306`, `app`).
 - Optional-import and database pool-cleanup tests exercise their production paths;
