@@ -8,6 +8,8 @@ that contained them.
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-11-18
+
 ### Fixed
 
 - Lambda loggers respect the configured log level by disabling DEBUG sampling by default.
@@ -317,7 +319,8 @@ This patch release includes a breaking credential-resolution change.
 - Basic project structure
 - Python package configuration
 
-[Unreleased]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.5.1...HEAD
+[Unreleased]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.6.0...HEAD
+[2.6.0]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.5.1...2.6.0
 [2.5.1]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.5.0...2.5.1
 [2.5.0]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.4.2...2.5.0
 [2.4.2]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.4.1...2.4.2
