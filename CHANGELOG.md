@@ -41,6 +41,12 @@ that contained them.
 
 ### Fixed
 
+- Assigning `get_config().es_host` gives the host explicit config priority above a credentials
+  host and below host environment variables or the client's `host` argument. Assigning `None`
+  resets it to the current environment/default value and removes explicit priority.
+- `DatabaseClient` fetches Secrets Manager credentials without rechecking environment variables
+  after selecting the store tier, matching `PostgreSQLClient`. The public
+  `get_database_credentials` helper keeps its environment-first behavior.
 - `PostgreSQLClient` given a secret with no `port` or `database` fills PostgreSQL defaults
   (`5432`, `postgres`) instead of the MySQL ones (`3306`, `app`).
 - Use canonical IANA names `America/New_York` and `America/Los_Angeles` for US timezone

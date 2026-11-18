@@ -10,12 +10,13 @@ import pymysql
 
 from .base_client import BaseClient, ServiceHealthMixin
 from .utils import handle_client_errors, safe_close_connection
-from .secrets_helper import get_database_credentials, _db_credentials_from_env, _normalise_db_secret
+from .secrets_helper import _db_credentials_from_env, _normalise_db_secret
 
 # Optional PostgreSQL support
 try:
     import psycopg2
     import psycopg2.extras
+
     HAS_POSTGRESQL = True
 except ImportError:
     HAS_POSTGRESQL = False
@@ -29,7 +30,7 @@ _connection_pool = {}
 def get_pool_stats() -> Dict[str, Any]:
     """
     Get current connection pool statistics.
-    
+
     Returns:
         Dictionary with pool status for monitoring
     """
@@ -80,7 +81,7 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
         pool_size: int = 5,
         pool_recycle: int = 3600,
         credentials: Optional[Dict[str, Any]] = None,
-        **kwargs
+        **kwargs,
     ):
         """
         Initialize database client.
@@ -99,7 +100,7 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
         self.pool_recycle = pool_recycle
 
         super().__init__(secret_name=secret_name, credentials=credentials, **kwargs)
-        
+
         # Build pool key for connection management
         self._pool_key = f"{self.credentials['host']}:{self.credentials['port']}"
 
@@ -120,13 +121,16 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
         return _db_credentials_from_env("mysql")
 
     def _fetch_credentials_from_sm(self, secret_name: Optional[str]) -> Dict[str, Any]:
-        """Override to use get_database_credentials for normalized field names."""
-        return get_database_credentials(self._resolve_secret_name(secret_name))
+        """Fetch and normalize the secret after the base class selects the store tier."""
+        from .secrets_helper import get_secret
+
+        raw_creds = get_secret(self._resolve_secret_name(secret_name))
+        return _normalise_db_secret(raw_creds, "mysql")
 
     def _clean_expired_connections(self, pool_key: str) -> None:
         """
         Clean expired connections from the pool.
-        
+
         Args:
             pool_key: Pool identifier
         """
@@ -160,10 +164,10 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
     def get_connection(self, database: Optional[str] = None):
         """
         Context manager for database connections with pooling support.
-        
+
         Args:
             database: Override default database
-            
+
         Yields:
             Database connection object
         """
@@ -259,23 +263,19 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
                     safe_close_connection(connection)
 
     @handle_client_errors(default_return=[])
-    def query(
-        self, 
-        sql: str, 
-        params: Optional[tuple] = None, 
-        database: Optional[str] = None
-    ) -> List[Dict]:
+    def query(self, sql: str, params: Optional[tuple] = None, database: Optional[str] = None) -> List[Dict]:
         """
         Execute a SELECT query with error handling.
-        
+
         Args:
             sql: SQL query with %s placeholders
             params: Query parameters
             database: Override default database
-            
+
         Returns:
             List of result rows as dictionaries
         """
+
         def _query_operation():
             with self.get_connection(database) as conn:
                 with conn.cursor() as cursor:
@@ -283,30 +283,23 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
                     return cursor.fetchall()
 
         return self._execute_with_error_handling(
-            "query",
-            _query_operation,
-            sql=sql[:100],  # First 100 chars for safety
-            database=database
+            "query", _query_operation, sql=sql[:100], database=database  # First 100 chars for safety
         )
 
     @handle_client_errors(reraise=True)
-    def execute(
-        self,
-        sql: str,
-        params: Optional[tuple] = None,
-        database: Optional[str] = None
-    ) -> int:
+    def execute(self, sql: str, params: Optional[tuple] = None, database: Optional[str] = None) -> int:
         """
         Execute an INSERT, UPDATE, or DELETE query with error handling.
-        
+
         Args:
             sql: SQL query with %s placeholders
             params: Query parameters
             database: Override default database
-            
+
         Returns:
             Number of affected rows
         """
+
         def _execute_operation():
             with self.get_connection(database) as conn:
                 with conn.cursor() as cursor:
@@ -314,12 +307,7 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
                     conn.commit()
                     return cursor.rowcount
 
-        return self._execute_with_error_handling(
-            "execute",
-            _execute_operation,
-            sql=sql[:100],
-            database=database
-        )
+        return self._execute_with_error_handling("execute", _execute_operation, sql=sql[:100], database=database)
 
     @handle_client_errors(reraise=True)
     def bulk_insert(
@@ -332,14 +320,14 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
     ) -> int:
         """
         Bulk insert records with error handling.
-        
+
         Args:
             table: Table name
             records: List of dictionaries to insert
             database: Override default database
             batch_size: Records per batch
             ignore_duplicates: Use INSERT IGNORE
-            
+
         Returns:
             Total number of inserted rows
         """
@@ -373,11 +361,7 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
             return total_inserted
 
         return self._execute_with_error_handling(
-            "bulk_insert",
-            _bulk_insert_operation,
-            table=table,
-            record_count=len(records),
-            database=database
+            "bulk_insert", _bulk_insert_operation, table=table, record_count=len(records), database=database
         )
 
     def _perform_health_check(self):
@@ -395,7 +379,7 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
     def get_connection_info(self) -> Dict:
         """
         Get database connection information.
-        
+
         Returns:
             Dictionary with connection details
         """
@@ -420,7 +404,7 @@ class PostgreSQLClient(BaseClient, ServiceHealthMixin):
         secret_name: Optional[str] = None,
         use_auth_credentials: bool = True,
         credentials: Optional[Dict[str, Any]] = None,
-        **kwargs
+        **kwargs,
     ):
         """
         Initialize PostgreSQL client.
@@ -476,10 +460,10 @@ class PostgreSQLClient(BaseClient, ServiceHealthMixin):
     def get_connection(self, database: Optional[str] = None):
         """
         Context manager for PostgreSQL connections.
-        
+
         Args:
             database: Override default database
-            
+
         Yields:
             psycopg2 connection object
         """
@@ -501,35 +485,26 @@ class PostgreSQLClient(BaseClient, ServiceHealthMixin):
                 connection.close()
 
     @handle_client_errors(default_return=[])
-    def query(
-        self,
-        sql: str,
-        params: Optional[tuple] = None,
-        database: Optional[str] = None
-    ) -> List[Dict]:
+    def query(self, sql: str, params: Optional[tuple] = None, database: Optional[str] = None) -> List[Dict]:
         """
         Execute PostgreSQL SELECT query.
-        
+
         Args:
             sql: SQL query with %s placeholders
             params: Query parameters
             database: Override default database
-            
+
         Returns:
             List of result rows as dictionaries
         """
+
         def _query_operation():
             with self.get_connection(database) as conn:
                 with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
                     cursor.execute(sql, params)
                     return [dict(row) for row in cursor.fetchall()]
 
-        return self._execute_with_error_handling(
-            "query",
-            _query_operation,
-            sql=sql[:100],
-            database=database
-        )
+        return self._execute_with_error_handling("query", _query_operation, sql=sql[:100], database=database)
 
     def _perform_health_check(self):
         """Perform PostgreSQL health check."""

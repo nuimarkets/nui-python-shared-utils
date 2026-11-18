@@ -174,8 +174,8 @@ def _normalise_es_secret(creds: Dict[str, Any]) -> Dict[str, Any]:
 def _resolve_es_host(credentials_host: Optional[str] = None) -> str:
     """
     Pick the Elasticsearch host: ES_HOST (or ELASTICSEARCH_HOST), then a host set
-    explicitly through configure(es_host=...) or Config(es_host=...), then the host
-    carried by the resolved credentials, then the configured default (localhost:9200).
+    explicitly through configure(es_host=...), Config(es_host=...) or assignment to
+    get_config().es_host, then the credentials' host, then the default (localhost:9200).
     """
     env_host = os.environ.get("ES_HOST") or os.environ.get("ELASTICSEARCH_HOST")
     if env_host:

@@ -14,7 +14,8 @@ The package uses a hierarchical configuration system with the following priority
 
 All clients (Slack, Elasticsearch, Database) resolve credentials in this order:
 
-1. **Explicit `credentials` dict** - Passed to constructor, skips everything else
+1. **Explicit `credentials` dict** - Passed to constructor, skips other credential sources;
+   an Elasticsearch `host` key still follows the host order below
 2. **Credential environment variables** - Per-client env vars, skips Secrets Manager
 3. **AWS Secrets Manager** - Default behavior (unchanged)
 
@@ -24,11 +25,14 @@ they return those values without calling Secrets Manager. `get_database_credenti
 MySQL defaults; `PostgreSQLClient` applies the PostgreSQL ones on both the env and the secret path.
 
 The Elasticsearch host resolves as: the client's `host` argument, then `ES_HOST` (or
-`ELASTICSEARCH_HOST`), then a host set with `nui.configure(es_host=...)`, then the secret's
-`host` field, then the built-in default
+`ELASTICSEARCH_HOST`), then an explicit config host set with `nui.configure(es_host=...)`,
+`Config(es_host=...)` or `get_config().es_host = ...`, then the secret's `host` field, then the built-in default
 (`localhost:9200`). The client and `get_elasticsearch_credentials` use the same order. A `host`
 key in an explicit `credentials` dict ranks where the secret's does, so to pin one client's host
 pass `host=` instead.
+
+Assigning `None` to `get_config().es_host` resets it to the current host environment variable
+or `localhost:9200` and removes its explicit config priority.
 
 ## Environment Variables
 

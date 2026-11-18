@@ -58,8 +58,11 @@ The Elasticsearch host follows its own order on both paths: the client's `host` 
 `ES_HOST` (or `ELASTICSEARCH_HOST`), then the `host` field of the resolved credentials (the
 secret's, or an explicit dict's), then `localhost:9200`. A host set with `configure(es_host=...)`
 ranks between the env var and the credentials' `host`, because a caller that set it chose it; an
-`ES_HOST` the config picked up from the environment at startup does not. To pin the host of one
-client whatever the environment holds, pass its `host` argument.
+`ES_HOST` the config picked up from the environment at startup does not. `Config(es_host=...)`
+and assignment to `get_config().es_host` have that same explicit config priority, with the latest
+value taking effect. Assigning `None` removes explicit config priority and restores the current
+environment/default value. To pin the host of one client whatever the environment holds, pass
+its `host` argument.
 
 ## Alternatives considered
 

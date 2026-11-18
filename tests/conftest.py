@@ -9,6 +9,21 @@ import json
 
 
 @pytest.fixture
+def clear_database_env(monkeypatch):
+    """Keep database tests independent of the invoking shell's credentials."""
+    for name in (
+        "DB_HOST",
+        "DB_PASSWORD",
+        "DB_PORT",
+        "DB_USERNAME",
+        "DB_DATABASE",
+        "DB_CREDENTIALS_SECRET",
+        "DBCREDENTIALS_SECRET",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
 def mock_boto3_session():
     """Mock boto3 session."""
     with patch("boto3.session.Session") as mock_session_class:
