@@ -183,7 +183,7 @@ The package expects AWS secrets in specific JSON formats:
 **Optional Fields:**
 
 - `host` - Used when the credentials come from this secret (no `ES_PASSWORD` or `ES_PASS`) and
-  no `host=` argument, `ES_HOST`, `ELASTICSEARCH_HOST` or `configure(es_host=...)` names one
+  no `host=` argument, `ES_HOST`, `ELASTICSEARCH_HOST` or explicit config host names one
 - `username` - Defaults to "elastic" if not provided
 
 #### Database Credentials

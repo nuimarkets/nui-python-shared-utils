@@ -257,9 +257,10 @@ def get_elasticsearch_credentials(secret_name: Optional[str] = None) -> Dict:
     1. Environment variables (ES_PASSWORD/ES_PASS + ES_USERNAME/ES_USER)
     2. AWS Secrets Manager
 
-    The host is ES_HOST (or ELASTICSEARCH_HOST), then a host set with
-    configure(es_host=...), then the secret's ``host`` field, then the default,
-    with ``:9200`` appended when no port is given and it is not a URL.
+    The host is ES_HOST (or ELASTICSEARCH_HOST), then an explicit config host
+    (configure, Config constructor or assignment to get_config().es_host), then
+    the secret's ``host`` field, then the default. Append ``:9200`` when no port
+    is given and it is not a URL.
 
     Args:
         secret_name: Override default secret name for Secrets Manager lookup.

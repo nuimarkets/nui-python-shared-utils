@@ -70,13 +70,14 @@ class Config:
     @property
     def es_host(self) -> str:
         """Elasticsearch host; assigning a value gives it explicit config priority."""
-        return self._es_host
+        return self.__dict__["es_host"]
 
     @es_host.setter
     def es_host(self, value: Optional[str]) -> None:
         """Set a host explicitly, or reset to environment/default behavior with None."""
         self._es_host_explicit = value is not None
-        self._es_host = (
+        # Keep the instance key so attribute patchers save and restore a local value.
+        self.__dict__["es_host"] = (
             value
             if value is not None
             else os.environ.get("ES_HOST") or os.environ.get("ELASTICSEARCH_HOST") or "localhost:9200"
@@ -84,7 +85,7 @@ class Config:
 
     @es_host.deleter
     def es_host(self) -> None:
-        """Reset host priority when the attribute is deleted (including mock cleanup)."""
+        """Reset host priority when the attribute is deleted."""
         self.es_host = None
 
     def to_dict(self) -> Dict[str, Any]:
