@@ -104,6 +104,12 @@ logger = get_powertools_logger("my-service", level="DEBUG")
 logger = get_powertools_logger("my-service", local_dev_colors=False)
 ```
 
+Lambda loggers default to no DEBUG sampling and honor `level`. Set
+`POWERTOOLS_LOGGER_SAMPLE_RATE` to configure Powertools' native DEBUG sampling:
+`0` disables sampling and `1` enables DEBUG for every invocation. For intermediate
+rates, when sampling decisions are refreshed depends on the installed Powertools
+version.
+
 ### Structured Logging
 
 The logger supports structured logging with the `extra` parameter. Use the shared
@@ -184,6 +190,18 @@ def powertools_handler(
         reraise_exceptions: Re-raise after logging and alerting. Defaults to False.
     """
 ```
+
+### Slack Account Context
+
+During a decorated invocation, any `SlackClient` without an explicit context uses
+that invocation's ARN to resolve the account in Lambda and local headers. This includes clients
+created before the handler and clients created inside it, with or without
+`slack_alert_channel`. Each client's own account-name mapping determines the display name.
+Calling `client.set_handler_context(context)` overrides inherited context for that client.
+Inherited context is restored after nested handlers and cleared when the invocation ends,
+including failures; concurrent calls keep separate context. A new worker thread needs
+Python's `contextvars.copy_context()` to propagate the calling thread's context.
+Copied contexts stop inheriting that invocation's account when the handler exits.
 
 ### When the Handler Raises
 

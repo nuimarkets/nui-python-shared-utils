@@ -8,7 +8,36 @@ that contained them.
 
 ## [Unreleased]
 
+### Fixed
+
+- Lambda loggers respect the configured log level by disabling DEBUG sampling by default.
+  Set `POWERTOOLS_LOGGER_SAMPLE_RATE` to opt into sampling.
+- `SlackClient` instances without explicit handler context inherit the current
+  `powertools_handler` invocation's account when rendering Lambda or local headers. Reused
+  clients resolve the current invocation; inherited context expires on exit even in copied
+  execution contexts, and nested calls restore their caller's context.
+
+## [2.5.1] - 2026-11-17
+
+### Fixed
+
+- The separate `nui-lambda-validation` build-time tool enforces declared offline pytest
+  plugins and runs verification against the recorded Lambda image. This release changes
+  `tools/` only; the runtime wheel is unchanged.
+
+## [2.5.0] - 2026-11-14
+
+### Added
+
+- `nui-lambda-validation`, a separate build-time distribution under `tools/`, validates
+  Lambda artifacts, dependency closure, native extensions and offline runtime behavior.
+  It is excluded from this package's wheel and source distribution.
+
+## [2.4.2] - 2026-11-09
+
 ### Changed
+
+This patch release includes a breaking credential-resolution change.
 
 - **BREAKING**: `get_database_credentials` and `get_slack_credentials` check environment
   variables before Secrets Manager, matching `DatabaseClient`, `SlackClient` and
@@ -33,8 +62,6 @@ that contained them.
   `bot_token`. `SlackClient.credentials` from env vars always carries a `webhook_url` key,
   `None` when `SLACK_WEBHOOK_URL` is unset.
 
-- **BREAKING**: require Python 3.10 or newer in both the main package and the legacy
-  redirect package. Python 3.9 is no longer supported or included in CI test matrices.
 - Powertools docstring and guide examples use generic service and namespace names
   (`order-processor`, `Ecommerce/Orders`) instead of internal repo names. Docs only, no
   behaviour change.
@@ -43,6 +70,18 @@ that contained them.
 
 - `PostgreSQLClient` given a secret with no `port` or `database` fills PostgreSQL defaults
   (`5432`, `postgres`) instead of the MySQL ones (`3306`, `app`).
+- Optional-import and database pool-cleanup tests exercise their production paths;
+  unused pool-cleanup code and unconditional placeholder tests are removed.
+
+## [2.4.1] - 2026-10-23
+
+### Changed
+
+- **BREAKING**: require Python 3.10 or newer in both the main package and the legacy
+  redirect package. Python 3.9 is no longer supported or included in CI test matrices.
+
+### Fixed
+
 - Use canonical IANA names `America/New_York` and `America/Los_Angeles` for US timezone
   constants and option labels, so importing timezone utilities and Slack formatting works
   on systems without legacy timezone links.
@@ -271,7 +310,11 @@ that contained them.
 - Basic project structure
 - Python package configuration
 
-[Unreleased]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.4...HEAD
+[Unreleased]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.5.1...HEAD
+[2.5.1]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.5.0...2.5.1
+[2.5.0]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.4.2...2.5.0
+[2.4.2]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.4.1...2.4.2
+[2.4.1]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.4...2.4.1
 [2.4]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.3...2.4
 [2.3]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.2...2.3
 [2.2]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.1...2.2

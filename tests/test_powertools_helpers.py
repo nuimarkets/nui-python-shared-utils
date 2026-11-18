@@ -52,7 +52,6 @@ class TestGetPowertoolsLogger:
                 mock_logger_class.assert_called_once_with(
                     service="test-service",
                     level="INFO",
-                    sampling_rate=1,
                     datefmt="%Y-%m-%dT%H:%M:%SZ",
                     utc=True,
                 )
@@ -598,3 +597,333 @@ class TestOptionalImports:
             # Should work without coloredlogs
             logger = get_powertools_logger("test-service", local_dev_colors=True)
             assert isinstance(logger, logging.Logger)
+
+
+@pytest.mark.parametrize("sample_rate, expect_debug", [(None, False), ("", False), ("0", False), ("1", True)])
+def test_lambda_logger_respects_sampling(monkeypatch, capsys, sample_rate, expect_debug):
+    """Exercise real Powertools output, including context injection on warm calls."""
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from nui_shared_utils.powertools_helpers import get_powertools_logger
+
+    monkeypatch.setenv("AWS_LAMBDA_RUNTIME_API", "127.0.0.1:9001")
+    monkeypatch.delenv("AWS_SAM_LOCAL", raising=False)
+    monkeypatch.delenv("POWERTOOLS_LOGGER_SAMPLE_RATE", raising=False)
+    if sample_rate is not None:
+        monkeypatch.setenv("POWERTOOLS_LOGGER_SAMPLE_RATE", sample_rate)
+    logger = get_powertools_logger(f"sampling-{uuid4()}", level="INFO")
+    context = SimpleNamespace(
+        function_name="test-function",
+        function_version="$LATEST",
+        invoked_function_arn="arn:aws:lambda:us-east-1:123456789012:function:test-function",
+        memory_limit_in_mb=128,
+        aws_request_id="request-1",
+    )
+
+    @logger.inject_lambda_context
+    def handler(event, context):
+        logger.debug("debug-marker")
+        logger.info("info-marker")
+
+    try:
+        for _ in range(2):
+            handler({}, context)
+            output = capsys.readouterr().out
+            assert "info-marker" in output
+            assert ("debug-marker" in output) is expect_debug
+    finally:
+        for log_handler in logger.handlers[:]:
+            logger.removeHandler(log_handler)
+            log_handler.close()
+
+
+@pytest.fixture
+def invocation_slack(monkeypatch):
+    """Build real clients with no AWS or Slack network calls."""
+    from nui_shared_utils.slack_client import SlackClient
+
+    monkeypatch.setenv("AWS_LAMBDA_RUNTIME_API", "127.0.0.1:9001")
+    monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", "test-function")
+    # Keep this suite focused on context propagation, independent of logger state.
+    logger = MagicMock()
+    logger.inject_lambda_context.side_effect = lambda func: func
+    monkeypatch.setattr("nui_shared_utils.powertools_helpers.get_powertools_logger", lambda *a, **k: logger)
+    monkeypatch.setattr(SlackClient, "_create_service_client", lambda self: MagicMock())
+    return lambda: SlackClient(credentials={"bot_token": "test-token"})
+
+
+def _invocation_context(account_id):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(invoked_function_arn=f"arn:aws:lambda:us-east-1:{account_id}:function:test-function")
+
+
+def _account_header(client):
+    return client._create_lambda_header_block()[0]["elements"][0]["text"]
+
+
+def test_client_created_inside_handler_inherits_account(invocation_slack):
+    from nui_shared_utils.powertools_helpers import powertools_handler
+
+    @powertools_handler(service_name="test")
+    def handler(event, context):
+        return _account_header(invocation_slack())
+
+    assert "Production (123456789012)" in handler({}, _invocation_context("123456789012"))
+
+
+@pytest.mark.parametrize("reraise", [False, True])
+def test_reused_client_context_is_current_and_cleared(invocation_slack, reraise):
+    from nui_shared_utils.powertools_helpers import powertools_handler
+
+    client = invocation_slack()
+
+    @powertools_handler(service_name="test", reraise_exceptions=reraise)
+    def handler(event, context):
+        if event.get("fail"):
+            raise ValueError("handler failure")
+        return _account_header(client)
+
+    for account_id in ("123456789012", "234567890123"):
+        assert account_id in handler({}, _invocation_context(account_id))
+        assert account_id not in _account_header(client)
+    if reraise:
+        with pytest.raises(ValueError, match="handler failure"):
+            handler({"fail": True}, _invocation_context("123456789012"))
+    else:
+        assert handler({"fail": True}, _invocation_context("123456789012"))["statusCode"] == 500
+    assert "123456789012" not in _account_header(client)
+    assert "Unknown" in handler({}, object())
+
+
+@pytest.mark.parametrize("local", [False, True])
+def test_explicit_client_context_wins(invocation_slack, monkeypatch, local):
+    from nui_shared_utils.powertools_helpers import powertools_handler
+
+    if local:
+        monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME")
+    client = invocation_slack()
+    client.set_handler_context(_invocation_context("345678901234"))
+
+    @powertools_handler(service_name="test")
+    def handler(event, context):
+        return _routed_account_header(client)
+
+    assert "Staging (345678901234)" in handler({}, _invocation_context("123456789012"))
+
+
+def test_invalid_explicit_context_keeps_inheritance(invocation_slack):
+    from nui_shared_utils.powertools_helpers import powertools_handler
+
+    client = invocation_slack()
+    for context in (None, object(), _invocation_context("123456789012")):
+        # The last stub deliberately carries a malformed ARN.
+        if hasattr(context, "invoked_function_arn"):
+            context.invoked_function_arn = "invalid"
+        client.set_handler_context(context)
+
+    @powertools_handler(service_name="test")
+    def handler(event, context):
+        return _account_header(client)
+
+    assert "Production (123456789012)" in handler({}, _invocation_context("123456789012"))
+
+
+def test_nested_handler_restores_outer_context(invocation_slack):
+    from nui_shared_utils.powertools_helpers import powertools_handler
+
+    client = invocation_slack()
+
+    @powertools_handler(service_name="inner")
+    def inner(event, context):
+        return _account_header(client)
+
+    @powertools_handler(service_name="outer")
+    def outer(event, context):
+        assert "234567890123" in inner({}, _invocation_context("234567890123"))
+        return _account_header(client)
+
+    assert "123456789012" in outer({}, _invocation_context("123456789012"))
+    assert "123456789012" not in _account_header(client)
+
+
+@pytest.mark.parametrize("local", [False, True])
+def test_concurrent_handlers_keep_context_separate(invocation_slack, monkeypatch, local):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from nui_shared_utils.powertools_helpers import powertools_handler
+
+    if local:
+        monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME")
+    client = invocation_slack()
+    first_entered, second_entered, first_rendered = Event(), Event(), Event()
+
+    @powertools_handler(service_name="test", reraise_exceptions=True)
+    def handler(event, context):
+        if event["first"]:
+            first_entered.set()
+            assert second_entered.wait(timeout=5)
+            try:
+                return _routed_account_header(client)
+            finally:
+                first_rendered.set()
+        second_entered.set()
+        assert first_rendered.wait(timeout=5)
+        return _routed_account_header(client)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(handler, {"first": True}, _invocation_context("123456789012"))
+        assert first_entered.wait(timeout=5)
+        second = pool.submit(handler, {"first": False}, _invocation_context("234567890123"))
+        first_header, second_header = first.result(timeout=5), second.result(timeout=5)
+    assert "123456789012" in first_header
+    assert "234567890123" not in first_header
+    assert "234567890123" in second_header
+    assert "123456789012" not in second_header
+
+
+def test_decorator_alert_client_uses_current_context(invocation_slack, monkeypatch):
+    from nui_shared_utils import powertools_helpers
+
+    client = invocation_slack()
+    headers = []
+    monkeypatch.setattr(powertools_helpers, "SlackClient", lambda **kwargs: client)
+    monkeypatch.setattr(client, "send_message", lambda **kwargs: headers.append(_account_header(client)))
+
+    @powertools_helpers.powertools_handler(service_name="test", slack_alert_channel="#errors")
+    def handler(event, context):
+        raise ValueError("handler failure")
+
+    for account_id in ("123456789012", "234567890123"):
+        assert handler({}, _invocation_context(account_id))["statusCode"] == 500
+        assert account_id in headers[-1]
+        assert account_id not in _account_header(client)
+
+
+def _routed_account_header(client):
+    return client._blocks_with_header(None, True, None)[0]["elements"][0]["text"]
+
+
+def test_local_alert_client_inherits_account(invocation_slack, monkeypatch):
+    from nui_shared_utils import powertools_helpers
+    from nui_shared_utils.slack_client import SlackClient
+
+    monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME")
+    transport = MagicMock()
+    transport.chat_postMessage.return_value = {"ok": True, "ts": "1", "channel": "C0"}
+    monkeypatch.setattr(SlackClient, "_create_service_client", lambda self: transport)
+    client = invocation_slack()
+    monkeypatch.setattr(powertools_helpers, "SlackClient", lambda **kwargs: client)
+
+    @powertools_helpers.powertools_handler(service_name="test", slack_alert_channel="#errors")
+    def handler(event, context):
+        raise ValueError("handler failure")
+
+    for account_id in ("123456789012", "234567890123"):
+        assert handler({}, _invocation_context(account_id))["statusCode"] == 500
+        header = transport.chat_postMessage.call_args.kwargs["blocks"][0]["elements"][0]["text"]
+        assert "Local Testing" in header
+        assert account_id in header
+        assert account_id not in _routed_account_header(client)
+
+
+@pytest.mark.parametrize("local", [False, True])
+@pytest.mark.parametrize("exit_mode", ["success", "handled", "raised"])
+def test_copied_context_expires_on_handler_exit(invocation_slack, monkeypatch, local, exit_mode):
+    from contextvars import copy_context
+
+    from nui_shared_utils.powertools_helpers import powertools_handler
+
+    if local:
+        monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME")
+    client = invocation_slack()
+    saved = []
+    active_headers = []
+
+    @powertools_handler(service_name="test", reraise_exceptions=exit_mode == "raised")
+    def handler(event, context):
+        saved.append(copy_context())
+        active_headers.append(saved[-1].run(_routed_account_header, client))
+        if exit_mode != "success":
+            raise ValueError("handler failure")
+        return "success"
+
+    if exit_mode == "raised":
+        with pytest.raises(ValueError, match="handler failure"):
+            handler({}, _invocation_context("123456789012"))
+    else:
+        result = handler({}, _invocation_context("123456789012"))
+        assert result == ("success" if exit_mode == "success" else {"statusCode": 500, "body": "Internal Server Error"})
+
+    assert "123456789012" in active_headers[0]
+    assert "123456789012" not in _routed_account_header(client)
+    assert "123456789012" not in saved[0].run(_routed_account_header, client)
+
+
+def test_nested_copied_contexts_have_independent_lifetimes(invocation_slack):
+    from contextvars import copy_context
+
+    from nui_shared_utils.powertools_helpers import powertools_handler
+
+    client = invocation_slack()
+    copies = {}
+    active_headers = []
+
+    @powertools_handler(service_name="inner")
+    def inner(event, context):
+        copies["inner"] = copy_context()
+        return "inner"
+
+    @powertools_handler(service_name="outer")
+    def outer(event, context):
+        copies["outer"] = copy_context()
+        result = inner({}, _invocation_context("234567890123"))
+        active_headers.extend(
+            [
+                _routed_account_header(client),
+                copies["outer"].run(_routed_account_header, client),
+                copies["inner"].run(_routed_account_header, client),
+            ]
+        )
+        return result
+
+    assert outer({}, _invocation_context("123456789012")) == "inner"
+    assert all("123456789012" in header for header in active_headers[:2])
+    assert "234567890123" not in active_headers[2]
+    for copied in copies.values():
+        assert "123456789012" not in copied.run(_routed_account_header, client)
+        assert "234567890123" not in copied.run(_routed_account_header, client)
+
+
+def test_copied_worker_context_expires_on_handler_exit(invocation_slack):
+    from concurrent.futures import ThreadPoolExecutor
+    from contextvars import copy_context
+    from threading import Event
+
+    from nui_shared_utils.powertools_helpers import powertools_handler
+
+    client = invocation_slack()
+    started, release = Event(), Event()
+
+    def render_after_exit():
+        started.set()
+        if not release.wait(timeout=5):
+            raise TimeoutError("worker was not released")
+        return _routed_account_header(client)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+
+        @powertools_handler(service_name="test", reraise_exceptions=True)
+        def handler(event, context):
+            future = pool.submit(copy_context().run, render_after_exit)
+            if not started.wait(timeout=5):
+                raise TimeoutError("worker did not start")
+            return future
+
+        try:
+            future = handler({}, _invocation_context("123456789012"))
+        finally:
+            release.set()
+        assert "123456789012" not in future.result(timeout=5)

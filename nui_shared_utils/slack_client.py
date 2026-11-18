@@ -21,7 +21,7 @@ except ImportError:
 from .base_client import BaseClient, ServiceHealthMixin
 from .secrets_helper import _normalise_slack_secret, _slack_credentials_from_env
 from .utils import create_aws_client, handle_client_errors
-from .lambda_helpers import get_lambda_environment_info
+from .lambda_helpers import _handler_context, get_lambda_environment_info
 
 log = logging.getLogger(__name__)
 
@@ -141,6 +141,8 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         # Store optional service name for display
         self._service_name = service_name
 
+        self._handler_context_set = False
+
         # Collect Lambda context once during initialization
         self._lambda_context = self._collect_lambda_context()
 
@@ -222,28 +224,44 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         return mappings
 
     def set_handler_context(self, context: Any) -> None:
-        """
-        Extract AWS account ID from the Lambda handler context object.
+        """Set this client's account context, overriding the current invocation.
 
-        Call this from your handler with the Lambda context to populate
-        account info without an STS API call. The powertools_handler
-        decorator calls this automatically.
+        Clients without an explicit context use the current powertools_handler
+        invocation when rendering Lambda headers. Call this method to choose a
+        different context without an STS API call.
 
         Args:
             context: Lambda context object (second arg to handler)
         """
+        account_context = self._account_context_from_handler(context)
+        if account_context:
+            self._handler_context_set = True
+            self._lambda_context.update(account_context)
+
+    def _account_context_from_handler(self, context: Any) -> Dict[str, str]:
+        """Resolve account display fields from a Lambda invocation ARN."""
         arn = getattr(context, "invoked_function_arn", None)
         if not arn:
-            return
+            return {}
 
         # ARN format: arn:aws:lambda:REGION:ACCOUNT_ID:function:NAME
         parts = arn.split(":")
-        if len(parts) >= 5:
-            account_id = parts[4]
-            self._lambda_context["aws_account_id"] = account_id
-            self._lambda_context["aws_account_arn"] = arn
-            self._lambda_context["aws_account_name"] = self._account_names.get(account_id, "Unknown")
-            log.debug(f"Account ID from Lambda ARN: {account_id}")
+        if len(parts) < 5:
+            return {}
+
+        account_id = parts[4]
+        return {
+            "aws_account_id": account_id,
+            "aws_account_arn": arn,
+            "aws_account_name": self._account_names.get(account_id, "Unknown"),
+        }
+
+    def _get_account_context(self) -> Dict[str, str]:
+        """Resolve account fields without retaining inherited invocation values."""
+        scope = _handler_context.get()
+        if not self._handler_context_set and scope is not None and scope.active:
+            return {**self._lambda_context, **self._account_context_from_handler(scope.context)}
+        return self._lambda_context
 
     def _get_default_config_prefix(self) -> str:
         """Return configuration prefix for Slack."""
@@ -271,7 +289,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         bot_token = self.credentials.get("bot_token") or self.credentials.get("token")
         if not bot_token:
             raise ValueError("Slack credentials must include 'bot_token' or 'token'")
-        
+
         return WebClient(token=bot_token)
 
     def _collect_lambda_context(self) -> Dict[str, str]:
@@ -372,13 +390,13 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         Returns:
             List of Slack blocks for Lambda context
         """
-        # Build account display from pre-resolved name + ID
-        account_id = self._lambda_context['aws_account_id']
-        account_name = self._lambda_context['aws_account_name']
+        account_context = self._get_account_context()
+        account_id = account_context["aws_account_id"]
+        account_name = account_context["aws_account_name"]
         account_display = f"{account_name} ({account_id})" if account_id != "Unknown" else "Unknown"
 
         # Use custom service name if provided, otherwise use full function name
-        display_name = self._service_name or self._lambda_context['function_name']
+        display_name = self._service_name or self._lambda_context["function_name"]
 
         # Build header lines (line1 includes optional event type)
         line1 = f"🤖 {display_name}"
@@ -387,13 +405,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         line2 = f"{account_display} • {self._lambda_context['aws_region']}"
         line3 = f"📋 Log: `{self._lambda_context['log_group']}`"
 
-        return [{
-            "type": "context",
-            "elements": [{
-                "type": "mrkdwn",
-                "text": f"{line1}\n{line2}\n{line3}"
-            }]
-        }]
+        return [{"type": "context", "elements": [{"type": "mrkdwn", "text": f"{line1}\n{line2}\n{line3}"}]}]
 
     def _create_local_header_block(self, event_type: Optional[str] = None) -> List[Dict]:
         """
@@ -414,8 +426,9 @@ class SlackClient(BaseClient, ServiceHealthMixin):
             username = "Unknown"
 
         timestamp = datetime.now(timezone.utc).strftime("%H:%M UTC")
-        account_id = self._lambda_context["aws_account_id"]
-        account_name = self._lambda_context["aws_account_name"]
+        account_context = self._get_account_context()
+        account_id = account_context["aws_account_id"]
+        account_name = account_context["aws_account_name"]
         account_display = f"{account_name} ({account_id})" if account_id != "Unknown" else "Unknown"
 
         line1 = f"👤 `Local Testing` • {username}"

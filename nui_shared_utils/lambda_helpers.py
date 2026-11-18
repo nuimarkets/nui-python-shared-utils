@@ -5,10 +5,21 @@ Provides standardized environment info extraction for logging and metrics contex
 """
 
 import os
-from typing import Dict, Union
-
+from contextvars import ContextVar
+from typing import Dict, Optional, Union
 
 __all__ = ["get_lambda_environment_info"]
+
+
+class _InvocationScope:
+    """Share an invocation's lifetime with copied execution contexts."""
+
+    def __init__(self, context: object) -> None:
+        self.context = context
+        self.active = True
+
+
+_handler_context: ContextVar[Optional[_InvocationScope]] = ContextVar("lambda_handler_context", default=None)
 
 
 def get_lambda_environment_info() -> Dict[str, Union[str, bool]]:
@@ -61,12 +72,7 @@ def get_lambda_environment_info() -> Dict[str, Union[str, bool]]:
 
     # Environment detection
     # Support common env var patterns: ENVIRONMENT, ENV, STAGE
-    environment = (
-        os.getenv("ENVIRONMENT")
-        or os.getenv("ENV")
-        or os.getenv("STAGE")
-        or "unknown"
-    ).lower()
+    environment = (os.getenv("ENVIRONMENT") or os.getenv("ENV") or os.getenv("STAGE") or "unknown").lower()
 
     # Normalize common environment names
     if environment in ("production", "prd"):
