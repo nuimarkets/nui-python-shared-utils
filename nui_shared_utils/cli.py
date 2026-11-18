@@ -2,6 +2,7 @@
 """
 CLI tools for AWS Lambda utilities and Slack workspace automation.
 """
+
 import os
 import sys
 import logging
@@ -24,7 +25,7 @@ log = logging.getLogger(__name__)
 
 
 @click.group()
-@click.version_option(version='0.1.0')
+@click.version_option(version="0.1.0")
 def cli():
     """AWS Lambda utilities and Slack workspace automation."""
     pass
@@ -51,7 +52,9 @@ def slack():
 @click.option("--no-interactive", is_flag=True, help="Skip interactive confirmations")
 @click.option("--validate-only", is_flag=True, help="Only validate channel names, do not create")
 @click.option("--test-access", is_flag=True, help="Test bot access to created channels")
-def setup_channels(config, token, check_only, dry_run, output, output_format, no_interactive, validate_only, test_access):
+def setup_channels(
+    config, token, check_only, dry_run, output, output_format, no_interactive, validate_only, test_access
+):
     """Set up Slack channels from YAML configuration.
 
     Automates channel creation, topic/purpose configuration, user invitations,
@@ -113,10 +116,7 @@ def setup_channels(config, token, check_only, dry_run, output, output_format, no
             click.echo(f"\n✅ Authenticated as: {auth_info['bot_name']} (@{auth_info['bot_id']})")
             click.echo(f"   Team: {auth_info['team']}")
         else:
-            click.echo(
-                click.style(f"❌ Authentication failed: {auth_info.get('error')}", fg="red"),
-                err=True
-            )
+            click.echo(click.style(f"❌ Authentication failed: {auth_info.get('error')}", fg="red"), err=True)
             sys.exit(1)
 
         # Check existing channels
@@ -151,21 +151,14 @@ def setup_channels(config, token, check_only, dry_run, output, output_format, no
         # Create/configure channels
         click.echo("\n🔨 Setting up channels...")
         with click.progressbar(
-            definitions,
-            label="Creating channels",
-            item_show_func=lambda d: f"#{d.name}" if d else ""
+            definitions, label="Creating channels", item_show_func=lambda d: f"#{d.name}" if d else ""
         ) as bar:
             channel_map = {}
             for definition in bar:
                 try:
-                    channel_id = creator._create_or_get_channel(definition)
+                    channel_id = creator.setup_channel(definition)
                     if channel_id:
                         channel_map[definition.name] = channel_id
-                        creator._bot_join_channel(channel_id, definition.name)
-                        creator._configure_channel(channel_id, definition)
-                        if definition.invite_users:
-                            creator._invite_users(channel_id, definition.invite_users, definition.name)
-                        creator._post_welcome_message(channel_id, definition)
                 except Exception as e:
                     click.echo(click.style(f"\n  ⚠️  Error setting up #{definition.name}: {e}", fg="yellow"))
 

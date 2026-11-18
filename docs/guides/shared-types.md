@@ -67,7 +67,10 @@ Mixin providing standardized health check functionality.
 
 ### RetryableOperationMixin
 
-Mixin providing retry functionality for operations.
+Deprecated mixin providing retry functionality for operations. Each call to
+`execute_with_retry()` emits a `DeprecationWarning`. Use the public `with_retry`
+decorator directly for new code; existing calls retain their retry and error-handling
+behavior.
 
 ```python
 execute_with_retry(

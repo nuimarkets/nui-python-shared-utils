@@ -71,6 +71,12 @@ slack-channel-setup --config channels.yaml --validate-only
 - Sets channel purpose, topic, and description
 - Posts welcome messages with channel context
 
+Python callers can use `ChannelCreator.setup_channel(definition)` for one channel or
+`ChannelCreator.create_channels(definitions)` for a batch. Both share the CLI's setup
+sequence and pause for one second after each successful setup. Single-channel setup
+returns the channel ID, or `None` if an existing channel cannot be found. Unexpected
+errors propagate to the caller; batch setup logs them and continues with the next channel.
+
 #### User Management
 
 - Invites specified users automatically
