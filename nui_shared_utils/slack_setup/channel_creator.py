@@ -57,30 +57,35 @@ class ChannelCreator:
 
         for definition in definitions:
             try:
-                channel_id = self._create_or_get_channel(definition)
+                channel_id = self.setup_channel(definition)
                 if channel_id:
                     channel_map[definition.name] = channel_id
-
-                    # Bot joins the channel
-                    self._bot_join_channel(channel_id, definition.name)
-
-                    # Set topic and purpose
-                    self._configure_channel(channel_id, definition)
-
-                    # Invite users if specified
-                    if definition.invite_users:
-                        self._invite_users(channel_id, definition.invite_users, definition.name)
-
-                    # Post welcome message
-                    self._post_welcome_message(channel_id, definition)
-
-                    # Small delay to avoid rate limits
-                    time.sleep(1)
-
             except Exception as e:
                 log.error(f"Error processing channel {definition.name}: {e}")
 
         return channel_map
+
+    def setup_channel(self, definition: ChannelDefinition) -> Optional[str]:
+        """Create or find a channel, configure it, and return its ID.
+
+        Joins the bot, sets topic and purpose, invites requested users, and posts
+        a welcome message. Successful setup includes a one-second rate-limit
+        delay. Returns None if an existing channel cannot be found; unexpected
+        errors propagate so callers can report them and continue their batch.
+        """
+        channel_id = self._create_or_get_channel(definition)
+        if not channel_id:
+            return None
+
+        self._bot_join_channel(channel_id, definition.name)
+        self._configure_channel(channel_id, definition)
+        if definition.invite_users:
+            self._invite_users(channel_id, definition.invite_users, definition.name)
+        self._post_welcome_message(channel_id, definition)
+
+        # Pace both batch and CLI callers to avoid rate limits.
+        time.sleep(1)
+        return channel_id
 
     def _create_or_get_channel(self, definition: ChannelDefinition) -> Optional[str]:
         """Create channel or get existing channel ID."""
