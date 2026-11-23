@@ -2,11 +2,14 @@
 Tests for slack_formatter module.
 """
 
+import logging
 import os
 import subprocess
 import sys
 from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
+
+import pytest
 
 from nui_shared_utils.slack_formatter import (
     format_currency,
@@ -465,18 +468,52 @@ class TestSlackBlockBuilder:
         assert blocks[0]["type"] == "header"
         assert blocks[1]["type"] == "section"
 
-    def test_build_limit(self):
-        """Test build with 50 block limit."""
+    @pytest.mark.parametrize("count", [0, 1, 49, 50, 51, 100, 101, 105])
+    def test_build_limit(self, count, caplog):
+        """Single-message builds warn only when blocks are omitted."""
         builder = SlackBlockBuilder()
-
-        # Add 55 blocks
-        for i in range(55):
+        for i in range(count):
             builder.add_section(f"Section {i}")
+        original = builder.blocks.copy()
 
-        blocks = builder.build()
+        with caplog.at_level(logging.WARNING, logger="nui_shared_utils.slack_formatter"):
+            blocks = builder.build()
 
-        # Should limit to 50
-        assert len(blocks) == 50
+        assert blocks == original[:50]
+        assert blocks is not builder.blocks
+        assert builder.blocks == original
+        records = [record for record in caplog.records if record.name == "nui_shared_utils.slack_formatter"]
+        if count > 50:
+            assert len(records) == 1
+            assert records[0].levelno == logging.WARNING
+            assert f"truncated {count} blocks to 50, omitting {count - 50} blocks" in records[0].getMessage()
+            assert "build_messages()" in records[0].getMessage()
+        else:
+            assert records == []
+
+        # A prior single-message build must leave the tail available.
+        assert [block for message in builder.build_messages() for block in message] == original
+
+    @pytest.mark.parametrize("count", [0, 1, 49, 50, 51, 100, 101, 105])
+    def test_build_messages(self, count, caplog):
+        """Continuation chunks retain every block in order without warnings."""
+        builder = SlackBlockBuilder()
+        for i in range(count):
+            builder.add_section(f"Section {i}")
+        original = builder.blocks.copy()
+
+        with caplog.at_level(logging.WARNING, logger="nui_shared_utils.slack_formatter"):
+            messages = builder.build_messages()
+
+        assert [len(message) for message in messages] == [min(50, count - start) for start in range(0, count, 50)]
+        assert [block for message in messages for block in message] == original
+        assert builder.blocks == original
+        assert not caplog.records
+        for message, repeated in zip(messages, builder.build_messages()):
+            assert message is not repeated
+            assert message is not builder.blocks
+        for actual, expected in zip([block for message in messages for block in message], original):
+            assert actual is expected
 
     def test_clear(self):
         """Test clearing blocks."""

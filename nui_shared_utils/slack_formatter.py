@@ -3,10 +3,13 @@ Slack message formatting utilities for consistent block formatting across Lambda
 Provides a builder pattern for creating Slack Block Kit messages.
 """
 
+import logging
 from typing import Dict, List, Any, Optional, Union
 from datetime import datetime, timedelta, timezone
 
 from .timezone import NZ_TZ
+
+log = logging.getLogger(__name__)
 
 # Severity emoji mapping
 SEVERITY_EMOJI = {"critical": "🚨", "warning": "⚠️", "info": "ℹ️", "success": "✅", "error": "❌"}
@@ -254,9 +257,27 @@ class SlackBlockBuilder:
         return self
 
     def build(self) -> List[Dict]:
-        """Build and return the blocks list."""
-        # Ensure we don't exceed Slack's 50 block limit
+        """Return the first 50 blocks, warning if any are omitted.
+
+        Use build_messages() to retain every block across multiple messages.
+        Neither method consumes the builder.
+        """
+        if len(self.blocks) > 50:
+            log.warning(
+                "SlackBlockBuilder.build() truncated %d blocks to 50, omitting %d blocks; "
+                "use build_messages() to retain all blocks.",
+                len(self.blocks),
+                len(self.blocks) - 50,
+            )
         return self.blocks[:50]
+
+    def build_messages(self) -> List[List[Dict]]:
+        """Return all blocks in ordered chunks of up to 50, or [] when empty.
+
+        Each chunk is a new list containing the original block dictionaries.
+        Send each chunk separately without adding automatic header blocks.
+        """
+        return [self.blocks[start : start + 50] for start in range(0, len(self.blocks), 50)]
 
     def clear(self) -> "SlackBlockBuilder":
         """Clear all blocks and start fresh."""
