@@ -223,6 +223,32 @@ blocks = (builder
 slack.send_message(channel="#deployments", text="Deployment update", blocks=blocks)
 ```
 
+### Messages with more than 50 blocks
+
+`build()` returns at most 50 blocks and logs a warning with the omitted count when
+the builder contains more. It leaves the builder intact. Use `build_messages()` to
+retain every block as ordered lists of up to 50 blocks; an empty builder returns `[]`.
+
+```python
+builder = SlackBlockBuilder()
+for i in range(105):
+    builder.add_section(f"Result {i}")
+
+# Sends three messages with 50, 50 and 5 blocks.
+for blocks in builder.build_messages():
+    if not slack.send_message(
+        channel="#reports",
+        text="Report results",
+        blocks=blocks,
+        include_lambda_header=False,
+    ):
+        raise RuntimeError("Could not send report continuation")
+```
+
+Disable the automatic context header for these chunks: it adds a block and can
+take a full chunk beyond Slack's 50-block message limit. Each list is new, while
+its block dictionaries are shared with the builder, as with `build()`.
+
 ### Block Types
 
 #### Header Block

@@ -10,11 +10,14 @@ that contained them.
 
 ### Added
 
+- `SlackBlockBuilder.build_messages()` returns all blocks in ordered chunks of up to
+  50 for sending continuation messages.
 - `ChannelCreator.setup_channel(definition)` exposes single-channel setup, including
   bot membership, configuration, invitations, welcome messages, and pacing.
 
 ### Fixed
 
+- `SlackBlockBuilder.build()` logs a warning when it omits blocks beyond the first 50.
 - Slack channel setup through the CLI observes the same one-second delay as batch setup.
 
 ### Deprecated
