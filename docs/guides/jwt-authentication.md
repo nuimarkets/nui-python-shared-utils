@@ -188,7 +188,7 @@ require_auth(event)
       401  -> drop the machine token, fetch a new one, retry once
       200 {"active": true}   -> cache `active` until t0 + 30, only if no entry exists  -> active
       200 {"active": false}  -> cache `revoked`, overwriting                           -> revoked
-      anything else          -> open the breaker, cache nothing                        -> unavailable
+      anything else          -> cache nothing; open the breaker if the issuer failed   -> unavailable
   mode enforce and (revoked, or unavailable with fail closed) -> AuthenticationError
 ```
 
@@ -196,7 +196,21 @@ require_auth(event)
 | --- | --- | --- |
 | `active` | 200 with `"active": true` | Until `t0 + 30` seconds, never past the token's `exp`. Written only when no entry exists, so a slow positive answer cannot replace a newer `revoked`. Not written once the token has expired. |
 | `revoked` | 200 with `"active": false`, the only result that is a revocation | Overwrites any entry, for `max(60, exp + 60 - now)` seconds |
-| `unavailable` | Anything else: a connection failure or timeout, a status other than 200 (redirects included, never followed), a body that is not a JSON object with a boolean `active`, a body over 1 KB, no machine token, a spent deadline, the breaker open, or a token with no string `jti` | Nothing. A failed call opens the breaker for 10 seconds, so cache misses skip the call until it lapses. Cached answers keep being served meanwhile. |
+| `unavailable` | Anything else: a connection failure or timeout, a status other than 200 (redirects included, never followed), a body that is not a JSON object with a boolean `active`, a body over 1 KB, no machine token, a spent deadline, the breaker open, or a token with no string `jti` | Nothing. An outcome that says the issuer, or the path to it, failed opens the breaker for 10 seconds (below), so cache misses skip the call until it lapses. Cached answers keep being served meanwhile. |
+
+The breaker opens only on an outcome that says the issuer, or the path to it, failed, so that the next miss would
+most likely fail the same way:
+
+| Opens the breaker for 10 seconds | Opens nothing |
+| --- | --- |
+| A connection failure, or a timeout on the status call (`connection`) | No machine token (`machine_token`), whatever the token endpoint answered |
+| A 5xx, a 429, a redirect or any other status that is neither 200 nor a 4xx (`http_<status>`) | The deadline spent before the status call (`deadline`) |
+| A 200 that is no answer (`malformed`) or is over 1 KB (`oversized`) | Any other 4xx (`http_<status>`), 403 included: a refusal of this token or this request |
+| A 401 after the retry with a new machine token (`http_401`): the issuer refuses this service's client, so every check in the process would end the same way | A token with no string `jti` (`missing_jti`), or an error inside the check (`unexpected`) |
+
+The status decides before the body cap: only a 200's body is read, so an oversized 502 is `http_502` and opens the
+breaker, an oversized 404 is `http_404` and does not, and an oversized 401 is retried like any 401. The rule
+depends on the reason alone, so a logged `reason` says whether the breaker opened.
 
 The cache, the breaker and the machine token live in the process, so each warm Lambda container keeps its own.
 The cache holds at most 10,000 answers and drops the least recently used first.
@@ -253,11 +267,12 @@ The check expects an endpoint that:
 - accepts `POST` with `Authorization: Bearer <machine token>` and the JSON body `{"jti": "<token id>"}`;
 - answers `200` with `{"active": true}` or `{"active": false}`, and nothing else counts as an answer;
 - does not evaluate expiry, since each validator owns expiry and its own leeway;
-- answers a database or other infrastructure error with a 5xx, never `"active": false`;
+- answers a database or other infrastructure error with a 5xx, never `"active": false` or a 4xx, since a 5xx
+  opens the breaker and a 4xx does not;
 - answers 401 when it refuses the caller's machine token. The check then drops that token, fetches a new one
-  and retries once within the deadline. A 403 is `unavailable` like any other status, with no new token: a new
-  token from the same client cannot change a refusal of its scope, or a refusal from a gateway or firewall in
-  front of the endpoint.
+  and retries once within the deadline; a second 401 opens the breaker. A 403 is `unavailable` like any other
+  status, with no new token: a new token from the same client cannot change a refusal of its scope, or a refusal
+  from a gateway or firewall in front of the endpoint.
 
 ### Logging
 

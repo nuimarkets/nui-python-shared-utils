@@ -283,8 +283,8 @@ seconds plus one call. With `TOKEN_STATUS_URL` unset nothing changes: no call, n
 | `TOKEN_STATUS_CREDENTIALS_SECRET` | unset | Or a Secrets Manager secret holding `client_id` and `client_secret` |
 
 Only `200 {"active": false}` is a revocation. Anything else (an error, a timeout, a redirect, a body over 1 KB)
-is `unavailable`, caches nothing and pauses calls for 10 seconds; the whole check, token fetch included, ends
-within 2 seconds. Standard library only, no new dependency.
+is `unavailable` and caches nothing, and when the issuer or the path to it failed, calls pause for 10 seconds.
+The whole check, token fetch included, ends within 2 seconds. Standard library only, no new dependency.
 
 **[→ See JWT authentication guide](docs/guides/jwt-authentication.md)**, including
 [the token status check](docs/guides/jwt-authentication.md#token-status-check-revocation)

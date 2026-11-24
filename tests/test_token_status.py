@@ -457,7 +457,7 @@ class TestCache:
 
 @pytest.mark.unit
 class TestBreaker:
-    def test_unavailable_opens_the_breaker_for_10_seconds(self, issuer, clock):
+    def test_an_issuer_failure_opens_the_breaker_for_10_seconds(self, issuer, clock):
         issuer.status_default = HttpResponse(502, b"")
         assert check(clock).reason == "http_502"
         issuer.status_default = answer(True)
@@ -498,6 +498,142 @@ class TestBreaker:
 
         assert ts.should_reject_token(claims_for(clock)) is rejected
         assert len(issuer.status_calls) == 1
+
+    @pytest.mark.parametrize(
+        "outcome, reason",
+        [
+            (TransportError("refused"), "connection"),
+            (TransportError("deadline"), "connection"),
+            (HttpResponse(500, b""), "http_500"),
+            (HttpResponse(503, b""), "http_503"),
+            (HttpResponse(429, b""), "http_429"),
+            (HttpResponse(302, b""), "http_302"),
+            (HttpResponse(204, b""), "http_204"),
+            (HttpResponse(200, b"not json"), "malformed"),
+            (answer("false"), "malformed"),
+            (OversizedResponse(), "oversized"),
+            (HttpResponse(401, b""), "http_401"),
+        ],
+        ids=[
+            "connection",
+            "timeout",
+            "http_500",
+            "http_503",
+            "http_429",
+            "redirect",
+            "http_204",
+            "not-json",
+            "non-boolean",
+            "oversized",
+            "second-401",
+        ],
+    )
+    def test_an_issuer_failure_opens_the_breaker(self, issuer, clock, outcome, reason):
+        issuer.status_default = outcome
+        assert check(clock).reason == reason
+        calls = len(issuer.status_calls)
+        issuer.status_default = answer(True)
+
+        result = check(clock, jti="other")
+
+        assert (result.status, result.reason) == (TokenStatus.UNAVAILABLE, "breaker_open")
+        assert len(issuer.status_calls) == calls
+
+    def test_a_second_401_opens_the_breaker_after_one_retry(self, issuer, clock):
+        issuer.status_queue = [HttpResponse(401, b""), HttpResponse(401, b"")]
+
+        assert check(clock).reason == "http_401"
+        assert check(clock, jti="other").reason == "breaker_open"
+        assert len(issuer.status_calls) == 2
+        assert len(issuer.token_calls) == 2
+
+    @pytest.mark.parametrize("status", [400, 403, 404, 409, 410, 422])
+    def test_a_per_token_answer_opens_nothing(self, issuer, clock, status):
+        issuer.status_queue = [HttpResponse(status, b"")]
+        assert check(clock).reason == f"http_{status}"
+
+        result = check(clock, jti="other")
+
+        assert result.status is TokenStatus.ACTIVE
+        assert len(issuer.status_calls) == 2
+
+    @pytest.mark.parametrize(
+        "token_reply",
+        [HttpResponse(500, b""), HttpResponse(401, b""), TransportError("refused"), HttpResponse(200, b"[]")],
+        ids=["http_500", "http_401", "connection", "malformed"],
+    )
+    def test_no_machine_token_opens_nothing(self, issuer, clock, token_reply):
+        issuer.token_queue = [token_reply]
+        assert check(clock).reason == "machine_token"
+
+        result = check(clock, jti="other")
+
+        assert result.status is TokenStatus.ACTIVE
+        assert len(issuer.status_calls) == 1
+
+    def test_missing_token_settings_open_nothing(self, issuer, monkeypatch, clock):
+        monkeypatch.delenv("TOKEN_STATUS_TOKEN_URL")
+        assert check(clock).reason == "machine_token"
+        configure(monkeypatch)
+
+        assert check(clock, jti="other").status is TokenStatus.ACTIVE
+
+    def test_a_budget_spent_before_the_call_opens_nothing(self, issuer, monkeypatch, clock):
+        monkeypatch.setattr(ts, "DEADLINE_SECONDS", 0.2)
+
+        def answer_at_the_deadline(call):
+            time.sleep(max(0.0, call["deadline"] - time.monotonic()))
+            return token_response("slow")
+
+        issuer.token_queue = [answer_at_the_deadline]
+        assert check(clock).reason == "deadline"
+        assert issuer.status_calls == []
+
+        result = check(clock, jti="other")
+
+        assert result.status is TokenStatus.ACTIVE
+        assert issuer.bearer(0) == "Bearer slow"
+
+    def test_a_401_whose_retry_gets_no_machine_token_opens_nothing(self, issuer, clock):
+        issuer.status_queue = [HttpResponse(401, b"")]
+        issuer.token_queue = [token_response("first"), HttpResponse(500, b"")]
+        assert (check(clock).reason, len(issuer.status_calls)) == ("machine_token", 1)
+
+        result = check(clock, jti="other")
+
+        assert result.status is TokenStatus.ACTIVE
+        assert len(issuer.status_calls) == 2
+
+    @pytest.mark.parametrize(
+        "reason, opens",
+        [
+            ("connection", True),
+            ("malformed", True),
+            ("oversized", True),
+            ("http_100", True),
+            ("http_204", True),
+            ("http_301", True),
+            ("http_399", True),
+            ("http_400", False),
+            ("http_401", True),
+            ("http_403", False),
+            ("http_428", False),
+            ("http_429", True),
+            ("http_430", False),
+            ("http_499", False),
+            ("http_500", True),
+            ("http_599", True),
+            ("http_999", True),
+            ("deadline", False),
+            ("machine_token", False),
+            ("unexpected", False),
+            ("missing_jti", False),
+            ("not_configured", False),
+            ("breaker_open", False),
+        ],
+    )
+    def test_the_reason_alone_says_whether_the_breaker_opened(self, reason, opens):
+        assert ts._issuer_failed(reason) is opens
 
 
 # ---------------------------------------------------------------------------
@@ -620,9 +756,8 @@ class TestMachineToken:
         assert result.reason == "http_403"
         assert len(issuer.status_calls) == 1
         assert len(issuer.token_calls) == 1
-        clock.advance(ts.BREAKER_SECONDS)
         check(clock)
-        assert issuer.bearer(1) == "Bearer machine-token-1"  # the token was kept
+        assert issuer.bearer(1) == "Bearer machine-token-1"  # the token was kept, and no breaker held the call
         assert len(issuer.token_calls) == 1
 
     def test_401_keeps_a_token_another_check_already_replaced(self, issuer, clock):
@@ -1472,6 +1607,45 @@ class TestHttpExchange:
         result, _ = run_real(monkeypatch, status_server.url("/status"), token_server.url("/token"))
 
         assert (result.status, result.reason) == (TokenStatus.UNAVAILABLE, "connection")
+
+    @pytest.mark.parametrize(
+        "framing",
+        [
+            "Content-Length: 65536\r\n\r\n" + " " * 65536,
+            "\r\n" + " " * 65536,
+            "Transfer-Encoding: chunked\r\n\r\n10000\r\n" + " " * 65536 + "\r\n0\r\n\r\n",
+        ],
+        ids=["content-length", "read-to-close", "chunked"],
+    )
+    @pytest.mark.parametrize("status, opens", [("502 Bad Gateway", True), ("404 Not Found", False)], ids=["502", "404"])
+    def test_the_status_decides_before_the_body_cap(self, servers, monkeypatch, framing, status, opens):
+        token_server = servers(respond(TOKEN_REPLY))
+        status_server = servers(respond(f"HTTP/1.1 {status}\r\n{framing}".encode()))
+
+        result, _ = run_real(monkeypatch, status_server.url("/status"), token_server.url("/token"))
+        follow_up = ts.check_token_status("other", time.time() + 3600)
+
+        assert (result.status, result.reason) == (TokenStatus.UNAVAILABLE, f"http_{status[:3]}")
+        assert (follow_up.reason == "breaker_open") is opens
+        time.sleep(0.1)
+        assert len(status_server.requests) == (1 if opens else 2)
+
+    def test_an_oversized_401_is_retried(self, servers, monkeypatch):
+        token_server = servers(respond(TOKEN_REPLY))
+
+        def refuse_then_answer(conn, request, server):
+            if len(server.requests) == 1:
+                conn.sendall(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 65536\r\n\r\n" + b" " * 65536)
+            else:
+                conn.sendall(json_reply({"active": False}))
+
+        status_server = servers(refuse_then_answer)
+
+        result, _ = run_real(monkeypatch, status_server.url("/status"), token_server.url("/token"))
+
+        assert result.status is TokenStatus.REVOKED
+        assert len(status_server.requests) == 2
+        assert len(token_server.requests) == 2
 
     def test_connection_refused(self, servers, monkeypatch):
         token_server = servers(respond(TOKEN_REPLY))

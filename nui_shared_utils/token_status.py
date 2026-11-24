@@ -13,8 +13,9 @@ calls :func:`should_reject_token`, which asks the issuer about the token's
   entry exists, so a slow positive answer never replaces a newer ``revoked``.
 - 200 ``{"active": false}``: cached as ``revoked``, overwriting, until 60
   seconds past the token's ``exp``.
-- Anything else: ``unavailable``. Nothing is cached, and a 10 second breaker
-  makes cache misses skip the call.
+- Anything else: ``unavailable``, and nothing is cached. When the outcome says
+  the issuer or the path to it failed (see :func:`_issuer_failed`), a 10 second
+  breaker makes cache misses skip the call.
 
 The cache, the breaker and this process's own client-credentials token live in
 the process (one warm Lambda container), with the cache bounded to 10,000
@@ -54,7 +55,7 @@ REVOKED_GRACE_SECONDS = 60
 """Seconds past the token's ``exp`` a ``revoked`` answer is kept."""
 
 BREAKER_SECONDS = 10
-"""Seconds cache misses skip the call after a check the issuer could not answer."""
+"""Seconds cache misses skip the call after the issuer, or the path to it, failed."""
 
 DEADLINE_SECONDS = 2.0
 """Wall-clock budget for one check: machine token, status call and body."""
@@ -483,7 +484,8 @@ def _resolve(url: str, jti: str, exp: float, deadline: float) -> Tuple[TokenStat
     answer, detail = _ask(url, jti, deadline)
 
     if not isinstance(answer, bool):
-        _open_breaker()
+        if _issuer_failed(answer):
+            _open_breaker()
         return TokenStatus.UNAVAILABLE, False, answer, detail
 
     try:
@@ -555,12 +557,40 @@ def _open_breaker() -> None:
         _breaker_until = _now() + BREAKER_SECONDS
 
 
+def _issuer_failed(reason: str) -> bool:
+    """
+    Whether a reason says the issuer, or the path to it, failed, so the next
+    miss would most likely fail the same way: a connection failure or a timeout
+    on the status call, a 5xx, a 429, a redirect or any other status that is
+    neither 200 nor a 4xx, a 200 that is no answer (``malformed``,
+    ``oversized``), and a 401 after the retry. These open the breaker.
+
+    The second 401 follows a fresh token, so the issuer refuses this service's
+    credential, and every check in the process would end the same way, each
+    costing a client-credentials grant. An outcome that ends before the status
+    call (no machine token, the budget spent) or that is about this one token
+    (any other 4xx) opens nothing.
+
+    A function of the reason alone, so a logged reason says whether the breaker opened.
+    """
+    if reason in ("connection", "malformed", "oversized"):
+        return True
+    if not reason.startswith("http_"):
+        return False
+    code = int(reason[len("http_") :])
+    return code in (401, 429) or code < 400 or code >= 500
+
+
 def _ask(url: str, jti: str, deadline: float) -> Tuple[Union[bool, str], Optional[str]]:
     """
     Call the status route, retrying once with a new machine token if the route
     refuses this process's token (401). A 403 is no answer, like any other
     status: a new token from the same client cannot change a refusal of its
     scope, or one from something in front of the route.
+
+    The status decides before the body cap: :func:`send` reads only a 200's
+    body, so a non-200 is ``http_<status>`` whatever its size, and a 401 is
+    retried whatever its size. Only a 200 over the cap is ``oversized``.
 
     Returns the ``active`` answer, or why there is none plus a detail.
     """

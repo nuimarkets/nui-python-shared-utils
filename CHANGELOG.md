@@ -18,8 +18,8 @@ that contained them.
   `closed`; default `open`) decide what is refused. The validator's own client-credentials token comes from
   `TOKEN_STATUS_TOKEN_URL` with `TOKEN_STATUS_CLIENT_ID` and `TOKEN_STATUS_CLIENT_SECRET`, or a Secrets Manager
   secret named by `TOKEN_STATUS_CREDENTIALS_SECRET`. The whole check ends within 2 seconds, follows no redirects
-  and reads at most 1 KB of the answer; anything but `200 {"active": true|false}` is `unavailable`, caches
-  nothing and pauses calls for 10 seconds. Standard library only. `validate_jwt` is unchanged. See
+  and reads at most 1 KB of the answer; anything but `200 {"active": true|false}` is `unavailable` and caches
+  nothing, and an outcome that says the issuer failed pauses calls for 10 seconds. Standard library only. `validate_jwt` is unchanged. See
   [the JWT guide](docs/guides/jwt-authentication.md#token-status-check-revocation).
 
 ## [3.0.0] - 2026-11-27
