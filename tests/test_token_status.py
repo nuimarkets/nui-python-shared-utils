@@ -1647,6 +1647,18 @@ class TestHttpExchange:
         assert len(status_server.requests) == 2
         assert len(token_server.requests) == 2
 
+    def test_an_oversized_401_refused_again_opens_the_breaker(self, servers, monkeypatch):
+        token_server = servers(respond(TOKEN_REPLY))
+        status_server = servers(respond(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 65536\r\n\r\n" + b" " * 65536))
+
+        result, _ = run_real(monkeypatch, status_server.url("/status"), token_server.url("/token"))
+        follow_up = ts.check_token_status("other", time.time() + 3600)
+
+        assert (result.status, result.reason) == (TokenStatus.UNAVAILABLE, "http_401")
+        assert follow_up.reason == "breaker_open"
+        assert len(status_server.requests) == 2
+        assert len(token_server.requests) == 2
+
     def test_connection_refused(self, servers, monkeypatch):
         token_server = servers(respond(TOKEN_REPLY))
         closed = LocalServer(accept=False)
