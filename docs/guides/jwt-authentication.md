@@ -267,8 +267,8 @@ The check expects an endpoint that:
 - accepts `POST` with `Authorization: Bearer <machine token>` and the JSON body `{"jti": "<token id>"}`;
 - answers `200` with `{"active": true}` or `{"active": false}`, and nothing else counts as an answer;
 - does not evaluate expiry, since each validator owns expiry and its own leeway;
-- answers a database or other infrastructure error with a 5xx, never `"active": false` or a 4xx, since a 5xx
-  opens the breaker and a 4xx does not;
+- answers a database or other infrastructure error with a 5xx, never `"active": false` or a 4xx: a 5xx opens
+  the breaker, and a 4xx other than a 429 or a second 401 does not;
 - answers 401 when it refuses the caller's machine token. The check then drops that token, fetches a new one
   and retries once within the deadline; a second 401 opens the breaker. A 403 is `unavailable` like any other
   status, with no new token: a new token from the same client cannot change a refusal of its scope, or a refusal
