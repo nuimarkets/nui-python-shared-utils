@@ -72,6 +72,7 @@ Deprecated mixin providing retry functionality for operations. Each call to
 decorator directly for new code. Existing calls retain their retry and error-handling
 behavior unless the caller treats `DeprecationWarning` as an error; those callers must
 migrate to `with_retry`, since the warning raises before the operation executes.
+Deprecated in 2.7.0; it will not be removed before 3.0.
 
 ```python
 execute_with_retry(
