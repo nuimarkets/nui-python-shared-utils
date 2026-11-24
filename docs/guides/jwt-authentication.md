@@ -188,7 +188,7 @@ require_auth(event)
       401  -> drop the machine token, fetch a new one, retry once
       200 {"active": true}   -> cache `active` until t0 + 30, only if no entry exists  -> active
       200 {"active": false}  -> cache `revoked`, overwriting                           -> revoked
-      anything else          -> cache nothing; open the breaker if the issuer failed   -> unavailable
+      anything else          -> cache nothing; breaker if the issuer or path failed    -> unavailable
   mode enforce and (revoked, or unavailable with fail closed) -> AuthenticationError
 ```
 
