@@ -8,6 +8,8 @@ that contained them.
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-11-25
+
 ### Added
 
 - `SlackBlockBuilder.build_messages()` returns all blocks in ordered chunks of up to
@@ -22,8 +24,11 @@ that contained them.
 
 ### Deprecated
 
-- `RetryableOperationMixin.execute_with_retry()` emits a `DeprecationWarning` on use.
-  Use the public `with_retry` decorator directly instead.
+- `RetryableOperationMixin` is deprecated: its `execute_with_retry()` method emits a
+  `DeprecationWarning` on use. Use the public `with_retry` decorator directly instead.
+  The mixin stays in the public API until 3.0 at the earliest. Callers that treat
+  `DeprecationWarning` as an error must migrate first, since the warning raises before
+  the operation runs.
 
 ## [2.6.0] - 2026-11-18
 
@@ -336,7 +341,8 @@ This patch release includes a breaking credential-resolution change.
 - Basic project structure
 - Python package configuration
 
-[Unreleased]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.6.0...HEAD
+[Unreleased]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.7.0...HEAD
+[2.7.0]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.6.0...2.7.0
 [2.6.0]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.5.1...2.6.0
 [2.5.1]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.5.0...2.5.1
 [2.5.0]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.4.2...2.5.0
