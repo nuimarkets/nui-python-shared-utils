@@ -143,6 +143,9 @@ class SlackClient(BaseClient, ServiceHealthMixin):
 
         self._handler_context_set = False
 
+        # Warn at most once per client that its Lambda header has no account
+        self._warned_unknown_account = False
+
         # Collect Lambda context once during initialization
         self._lambda_context = self._collect_lambda_context()
 
@@ -380,6 +383,23 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         except Exception:
             return "Unknown"
 
+    def _warn_unknown_account(self) -> None:
+        """Log once per client that its Lambda header shows no AWS account.
+
+        Once per client rather than once per process: every misconfigured client
+        is reported, and the count is bounded by the headed messages it posts.
+        The header makes no STS call, so without a handler context the account
+        cannot be known.
+        """
+        if self._warned_unknown_account:
+            return
+        self._warned_unknown_account = True
+        log.warning(
+            "Slack Lambda header has no AWS account context, so it shows the account as 'Unknown'. "
+            "Call SlackClient.set_handler_context(context) with the handler's context, "
+            "or wrap the handler in powertools_handler."
+        )
+
     def _create_lambda_header_block(self, event_type: Optional[str] = None) -> List[Dict]:
         """
         Create Lambda context header block.
@@ -394,6 +414,8 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         account_id = account_context["aws_account_id"]
         account_name = account_context["aws_account_name"]
         account_display = f"{account_name} ({account_id})" if account_id != "Unknown" else "Unknown"
+        if account_id == "Unknown":
+            self._warn_unknown_account()
 
         # Use custom service name if provided, otherwise use full function name
         display_name = self._service_name or self._lambda_context["function_name"]

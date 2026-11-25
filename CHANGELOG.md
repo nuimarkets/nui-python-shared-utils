@@ -8,6 +8,12 @@ that contained them.
 
 ## [Unreleased]
 
+### Fixed
+
+- `SlackClient` logs a warning, once per client, when it renders a Lambda header with no
+  AWS account context, naming `set_handler_context(context)` and `powertools_handler` as
+  the fixes. The header itself is unchanged.
+
 ## [2.7.0] - 2026-11-25
 
 ### Added

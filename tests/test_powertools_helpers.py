@@ -673,6 +673,20 @@ def test_client_created_inside_handler_inherits_account(invocation_slack):
     assert "Production (123456789012)" in handler({}, _invocation_context("123456789012"))
 
 
+def test_no_unknown_account_warning_inside_handler_scope(invocation_slack, caplog):
+    from nui_shared_utils.powertools_helpers import powertools_handler
+
+    caplog.set_level(logging.WARNING, logger="nui_shared_utils.slack_client")
+    client = invocation_slack()
+
+    @powertools_handler(service_name="test")
+    def handler(event, context):
+        return _account_header(client)
+
+    assert "Production (123456789012)" in handler({}, _invocation_context("123456789012"))
+    assert [r for r in caplog.records if r.name == "nui_shared_utils.slack_client"] == []
+
+
 @pytest.mark.parametrize("reraise", [False, True])
 def test_reused_client_context_is_current_and_cleared(invocation_slack, reraise):
     from nui_shared_utils.powertools_helpers import powertools_handler
