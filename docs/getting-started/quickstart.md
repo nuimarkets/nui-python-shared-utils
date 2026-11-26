@@ -67,6 +67,12 @@ def lambda_handler(event, context):
 Pass a dictionary with the Lambda context attributes shown above. Keep the retry
 operation inside the handler's `try` so exhausted retries reach the error helper.
 
+Returning the error response suits a handler behind API Gateway or a function URL,
+where the response is how the caller learns of the failure. For SQS, EventBridge
+or asynchronous invocations, re-raise instead: a returned response counts as a
+successful invocation, so Lambda neither retries the event nor sends it to a
+dead-letter queue.
+
 ### 2. Database Operations
 
 ```python
@@ -191,64 +197,70 @@ nui.configure(
 )
 
 @nui.track_lambda_performance()
-def lambda_handler(event, context):
-    """Complete example with all integrations."""
-    
-    try:
-        # Initialize clients
-        db = nui.DatabaseClient()
-        es = nui.ElasticsearchClient()
-        slack = nui.SlackClient()
+def process_records(event, context):
+    """Complete example with all integrations; raises on failure."""
+    # Initialize clients
+    db = nui.DatabaseClient()
+    es = nui.ElasticsearchClient()
+    slack = nui.SlackClient()
 
-        # Process records
-        records = event.get('records', [])
-        processed = 0
-        
-        for record in records:
-            # Database operation
-            with db.get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        "INSERT INTO processed_records (data) VALUES (%s)",
-                        (record,)
-                    )
-            
-            processed += 1
-        
-        # Log to Elasticsearch
-        indexed, failed = es.streaming_bulk(iter([{
-            "_index": "application-logs",
-            "_source": {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "level": "INFO",
-                "message": f"Processed {processed} records",
-                "function_name": context.function_name
-            }
-        }]), raise_on_error=True)
-        if indexed != 1 or failed:
-            raise RuntimeError("Application log indexing failed")
-        
-        # Send notification
-        slack.send_message(
-            channel="#notifications",
-            text=f"Successfully processed {processed} records"
-        )
-        
-        # Custom metrics, flushed before returning
-        with nui.MetricsPublisher("MyService") as metrics:
-            metrics.put_metric("RecordsProcessed", processed, unit="Count")
-        
-        return {
-            "statusCode": 200,
-            "body": f"Processed {processed} records"
+    # Process records
+    records = event.get('records', [])
+    processed = 0
+
+    for record in records:
+        # Database operation
+        with db.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO processed_records (data) VALUES (%s)",
+                    (record,)
+                )
+
+        processed += 1
+
+    # Log to Elasticsearch
+    indexed, failed = es.streaming_bulk(iter([{
+        "_index": "application-logs",
+        "_source": {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": "INFO",
+            "message": f"Processed {processed} records",
+            "function_name": context.function_name
         }
-        
+    }]), raise_on_error=True)
+    if indexed != 1 or failed:
+        raise RuntimeError("Application log indexing failed")
+
+    # Send notification
+    slack.send_message(
+        channel="#notifications",
+        text=f"Successfully processed {processed} records"
+    )
+
+    # Custom metrics, flushed before returning
+    with nui.MetricsPublisher("MyService") as metrics:
+        metrics.put_metric("RecordsProcessed", processed, unit="Count")
+
+    return {
+        "statusCode": 200,
+        "body": f"Processed {processed} records"
+    }
+
+def lambda_handler(event, context):
+    try:
+        return process_records(event, context)
     except Exception as error:
         return nui.handle_lambda_error(error, {
             "function_name": context.function_name,
             "aws_request_id": context.aws_request_id,
         })
 ```
+
+`track_lambda_performance()` counts an invocation as an error only when the
+function it wraps raises. Apply it to the function that does the work and catch
+outside it, as above; a `try` inside the decorated function hides every failure
+from the `LambdaErrors` metric.
 
 ### 7. JWT Authentication for API Gateway
 
@@ -387,10 +399,9 @@ def lambda_handler(event, context):
             channel="#alerts",
             text=f"❌ Lambda error in {context.function_name}: {str(e)}"
         )
-        return nui.handle_lambda_error(e, {
-            "function_name": context.function_name,
-            "aws_request_id": context.aws_request_id,
-        })
+        # Re-raise so Lambda records the failure; an API Gateway handler can
+        # return nui.handle_lambda_error(e, {...}) instead (see section 1)
+        raise
 ```
 
 ### Retry with Backoff
