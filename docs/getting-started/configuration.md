@@ -269,9 +269,11 @@ calls can fetch independently; there is no single-flight guarantee.
 TTL bounds cache reuse at retrieval calls, not rotation propagation or immediate
 revocation. Existing `BaseClient` instances retain credentials resolved at
 construction, and previously fetched RSA key objects retain their value.
-Recreate clients or retrieve keys again to adopt refreshed credentials. Explicit
-credentials and credential environment variables keep their existing precedence
-and bypass Secrets Manager.
+Recreate clients or retrieve keys again to adopt refreshed credentials. For MySQL,
+fresh authentication requires a new physical connection: `DatabaseClient(use_pool=False)`
+requests one. Recreating a client does not itself guarantee that a pooled
+connection is new. Explicit credentials and credential environment variables keep
+their existing precedence and bypass Secrets Manager.
 
 ### Creating Secrets
 

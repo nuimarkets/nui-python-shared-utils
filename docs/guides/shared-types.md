@@ -507,7 +507,10 @@ actual retrieval age; `ttl_seconds=0` bypasses cached reads and `force_refresh=T
 fetches regardless of age. Refresh errors surface without serving stale values.
 The cache is process-local and keyed by secret name, not AWS account or region.
 Existing clients and previously fetched RSA keys retain their credentials until
-recreated or retrieved again. See [configuration](../getting-started/configuration.md#secret-cache-freshness)
+recreated or retrieved again. Fresh MySQL authentication also requires a new
+physical connection, for example `DatabaseClient(use_pool=False)`, since recreating
+a client can reuse a pooled connection. See
+[configuration](../getting-started/configuration.md#secret-cache-freshness)
 for option validation and AWS-context handling.
 
 ## Connection Pool Statistics
