@@ -105,7 +105,7 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
         *,
         connect_timeout: float = 10,                    # Seconds to establish a connection
         read_timeout: Optional[float] = 30,             # Seconds per socket read; None disables the limit
-        **kwargs,                                       # Extra client configuration
+        **kwargs,                                       # Stored in client_config; this client reads none
     ): ...
 
     def query(self, sql: str, params: Optional[tuple] = None, database: Optional[str] = None) -> Sequence[Dict]: ...
@@ -167,7 +167,7 @@ class PostgreSQLClient(BaseClient, ServiceHealthMixin):
         credentials: Optional[Dict[str, Any]] = None,   # Explicit credentials, skips env vars and Secrets Manager
         *,
         connect_timeout: int = 5,                       # Integer seconds to connect, per host
-        **kwargs,                                       # Extra client configuration
+        **kwargs,                                       # Stored in client_config; this client reads none
     ): ...
 
     def query(self, sql: str, params: Optional[tuple] = None, database: Optional[str] = None) -> List[Dict]: ...
@@ -259,7 +259,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         account_names_config: Optional[str] = None,      # Path to YAML config
         service_name: Optional[str] = None,              # Display name for messages
         credentials: Optional[Dict[str, Any]] = None,    # Explicit credentials, skips env vars and Secrets Manager
-        **kwargs,                                        # Extra client configuration
+        **kwargs,                                        # Stored in client_config; this client reads none
     ): ...
 
     def send_message(
