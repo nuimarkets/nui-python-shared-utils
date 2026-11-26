@@ -38,7 +38,9 @@ def _require_rsa():
 
             _rsa = rsa
         except ImportError:
-            raise ImportError("The 'rsa' package is required for JWT support. Install with: pip install nui-python-shared-utils[jwt]") from None
+            raise ImportError(
+                "The 'rsa' package is required for JWT support. Install with: pip install nui-python-shared-utils[jwt]"
+            ) from None
     return _rsa
 
 
@@ -75,7 +77,9 @@ def get_jwt_public_key(secret_name: Optional[str] = None, key_field: str = "TOKE
 
     secret_name = secret_name or os.environ.get("JWT_PUBLIC_KEY_SECRET")
     if not secret_name:
-        raise JWTValidationError("No JWT public key secret name provided (set JWT_PUBLIC_KEY_SECRET or pass secret_name)")
+        raise JWTValidationError(
+            "No JWT public key secret name provided (set JWT_PUBLIC_KEY_SECRET or pass secret_name)"
+        )
 
     secret = get_secret(secret_name)
 
@@ -267,11 +271,15 @@ def check_auth(
                 "Content-Type": "application/json",
                 "Access-Control-Allow-Origin": "*",
             },
-            "body": json.dumps({
-                "errors": [{
-                    "status": "401",
-                    "title": "Unauthorized",
-                    "detail": "Authentication required",
-                }]
-            }),
+            "body": json.dumps(
+                {
+                    "errors": [
+                        {
+                            "status": "401",
+                            "title": "Unauthorized",
+                            "detail": "Authentication required",
+                        }
+                    ]
+                }
+            ),
         }
