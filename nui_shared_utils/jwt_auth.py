@@ -61,8 +61,9 @@ def get_jwt_public_key(secret_name: Optional[str] = None, key_field: str = "TOKE
     """
     Fetch PEM public key from AWS Secrets Manager and return as rsa.PublicKey.
 
-    Relies on secrets_helper cache — repeated calls with the same secret_name
-    do not make additional Secrets Manager API calls.
+    Uses secrets_helper's default 300-second retrieval cache. The first call
+    at or after expiry retrieves the secret again; retrieval errors surface
+    instead of serving a stale key. Previously fetched key objects are unchanged.
 
     Args:
         secret_name: Secrets Manager secret name. Falls back to JWT_PUBLIC_KEY_SECRET env var.
