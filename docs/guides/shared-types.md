@@ -80,11 +80,11 @@ Deprecated in 2.7.0; it will not be removed before 3.0.
 class RetryableOperationMixin:
     def execute_with_retry(
         self,
-        operation_func: Callable,
+        operation_func,
         operation_name: str,
         max_attempts: int = 3,
         **retry_kwargs,
-    ) -> Any: ...
+    ): ...
 ```
 
 ## Database Types
@@ -104,7 +104,7 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
         credentials: Optional[Dict[str, Any]] = None,   # Explicit credentials, skips env vars and Secrets Manager
         *,
         connect_timeout: float = 10,                    # Seconds to establish a connection
-        read_timeout: Optional[float] = 30,             # Seconds to wait for a query result
+        read_timeout: Optional[float] = 30,             # Seconds per socket read; None disables the limit
         **kwargs,                                       # Extra client configuration
     ): ...
 
@@ -166,7 +166,7 @@ class PostgreSQLClient(BaseClient, ServiceHealthMixin):
         use_auth_credentials: bool = True,              # Use auth-specific credentials from secret
         credentials: Optional[Dict[str, Any]] = None,   # Explicit credentials, skips env vars and Secrets Manager
         *,
-        connect_timeout: int = 5,                       # Seconds to establish a connection
+        connect_timeout: int = 5,                       # Integer seconds to connect, per host
         **kwargs,                                       # Extra client configuration
     ): ...
 
@@ -187,7 +187,8 @@ class ElasticsearchClient(BaseClient, ServiceHealthMixin):
         self,
         host: Optional[str] = None,                     # Override ES host
         secret_name: Optional[str] = None,              # Override secret name
-        credentials: Optional[Dict[str, Any]] = None,   # Explicit credentials, skips env vars and Secrets Manager
+        credentials: Optional[Dict[str, Any]] = None,   # Explicit credentials, skips credential env vars and
+        # Secrets Manager; a "host" key still ranks below ES_HOST
         **kwargs,                                       # Client configuration, read with these defaults:
         # scheme="http", request_timeout=30, max_retries=3, retry_on_timeout=True
     ): ...
@@ -200,6 +201,9 @@ class ElasticsearchClient(BaseClient, ServiceHealthMixin):
     def get_cluster_info(self) -> Dict: ...
     def get_indices_info(self, pattern: str = "*") -> List[Dict]: ...
 ```
+
+The full host and credential order is in
+[credential resolution precedence](../getting-started/configuration.md#credential-resolution-precedence).
 
 Example call:
 
