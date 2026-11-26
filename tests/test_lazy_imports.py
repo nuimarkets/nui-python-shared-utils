@@ -24,12 +24,14 @@ def _run(script: str) -> str:
 
 def test_bare_package_import_does_not_load_boto3():
     """``import nui_shared_utils`` must not transitively import boto3."""
-    output = _run("""
+    output = _run(
+        """
         import sys
         import nui_shared_utils  # noqa: F401
         for mod in ("boto3", "botocore"):
             print(f"{mod}={mod in sys.modules}")
-        """)
+        """
+    )
     assert "boto3=False" in output
     assert "botocore=False" in output
 
@@ -43,12 +45,14 @@ def test_bare_package_import_does_not_load_anthropic():
     an ``llm`` attribute. anthropic is installed via the ``[dev]`` extra, so this
     assertion is meaningful rather than trivially true.
     """
-    output = _run("""
+    output = _run(
+        """
         import sys
         import nui_shared_utils  # noqa: F401
         print(f"anthropic={'anthropic' in sys.modules}")
         print(f"llm={'nui_shared_utils.llm' in sys.modules}")
-        """)
+        """
+    )
     assert "anthropic=False" in output
     assert "llm=False" in output
 
@@ -60,12 +64,14 @@ def test_logging_contract_import_stays_dependency_free():
     is cheap to import and light in a Lambda bundle. It must not transitively load
     boto3, aws-lambda-powertools, elasticsearch, or slack_sdk.
     """
-    output = _run("""
+    output = _run(
+        """
         import sys
         from nui_shared_utils.logging import F, stdlib_binder, bind_request  # noqa: F401
         for mod in ("boto3", "aws_lambda_powertools", "elasticsearch", "slack_sdk"):
             print(f"{mod}={mod in sys.modules}")
-        """)
+        """
+    )
     assert "boto3=False" in output
     assert "aws_lambda_powertools=False" in output
     assert "elasticsearch=False" in output
@@ -74,11 +80,13 @@ def test_logging_contract_import_stays_dependency_free():
 
 def test_bare_package_import_does_not_load_logging_submodule():
     """``import nui_shared_utils`` must not eagerly import the logging subpackage."""
-    output = _run("""
+    output = _run(
+        """
         import sys
         import nui_shared_utils  # noqa: F401
         print(f"logging={'nui_shared_utils.logging' in sys.modules}")
-        """)
+        """
+    )
     assert "logging=False" in output
 
 
@@ -88,20 +96,24 @@ def test_jwt_auth_import_does_not_load_boto3():
     Lambdas using only JWT validation (with cached public key) should never
     pay the boto3 cold-start cost.
     """
-    output = _run("""
+    output = _run(
+        """
         import sys
         from nui_shared_utils.jwt_auth import check_auth  # noqa: F401
         print(f"boto3={'boto3' in sys.modules}")
-        """)
+        """
+    )
     assert "boto3=False" in output
 
 
 def test_powertools_helpers_import_does_not_load_boto3():
-    output = _run("""
+    output = _run(
+        """
         import sys
         from nui_shared_utils.powertools_helpers import get_powertools_logger  # noqa: F401
         print(f"boto3={'boto3' in sys.modules}")
-        """)
+        """
+    )
     assert "boto3=False" in output
 
 
@@ -112,12 +124,14 @@ def test_powertools_helpers_does_not_pull_slack_sdk():
     ``powertools_handler``; consumers using only ``get_powertools_logger``
     should not pay the slack_sdk import cost (~150ms).
     """
-    output = _run("""
+    output = _run(
+        """
         import sys
         from nui_shared_utils.powertools_helpers import get_powertools_logger  # noqa: F401
         print(f"slack_sdk={'slack_sdk' in sys.modules}")
         print(f"slack_client={'nui_shared_utils.slack_client' in sys.modules}")
-        """)
+        """
+    )
     assert "slack_sdk=False" in output
     assert "slack_client=False" in output
 
@@ -129,7 +143,8 @@ def test_secrets_helper_loads_boto3_only_on_first_call():
     ``moto`` is imported after the lazy-import assertion because it pulls
     ``boto3`` transitively, which would skew ``after_import``.
     """
-    output = _run("""
+    output = _run(
+        """
         import sys
         from nui_shared_utils import secrets_helper
         print(f"after_import={'boto3' in sys.modules}")
@@ -141,7 +156,8 @@ def test_secrets_helper_loads_boto3_only_on_first_call():
             except Exception:
                 pass
         print(f"after_call={'boto3' in sys.modules}")
-        """)
+        """
+    )
     assert "after_import=False" in output
     assert "after_call=True" in output
 
@@ -165,13 +181,15 @@ def test_unknown_attribute_raises_attribute_error():
 
 def test_lazy_attribute_is_cached_after_first_access():
     """Once resolved, the attribute should live in ``globals()`` for fast reuse."""
-    output = _run("""
+    output = _run(
+        """
         import nui_shared_utils as nui
         first = nui.format_currency
         second = nui.format_currency
         print(f"same={first is second}")
         print(f"in_globals={'format_currency' in vars(nui)}")
-        """)
+        """
+    )
     assert "same=True" in output
     assert "in_globals=True" in output
 

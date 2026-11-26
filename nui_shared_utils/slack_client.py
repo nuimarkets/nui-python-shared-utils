@@ -14,6 +14,7 @@ from datetime import datetime
 
 try:
     import yaml
+
     YAML_AVAILABLE = True
 except ImportError:
     YAML_AVAILABLE = False
@@ -96,7 +97,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         account_names_config: Optional[str] = None,
         service_name: Optional[str] = None,
         credentials: Optional[Dict[str, Any]] = None,
-        **kwargs
+        **kwargs,
     ):
         """
         Initialize Slack client with base class functionality.
@@ -150,9 +151,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         self._lambda_context = self._collect_lambda_context()
 
     def _load_account_names(
-        self,
-        account_names: Optional[Dict[str, str]],
-        config_path: Optional[str]
+        self, account_names: Optional[Dict[str, str]], config_path: Optional[str]
     ) -> Dict[str, str]:
         """
         Load account name mappings from config file or dict.
@@ -186,20 +185,20 @@ class SlackClient(BaseClient, ServiceHealthMixin):
                     if not config_file.exists():
                         log.debug(f"Account names config file not found: {config_path} (optional)")
                     else:
-                        with open(config_file, 'r', encoding='utf-8') as f:
+                        with open(config_file, "r", encoding="utf-8") as f:
                             config_data = yaml.safe_load(f)
 
                         if config_data is None:
                             log.warning(f"Account names config file is empty: {config_path}")
                         elif not isinstance(config_data, dict):
                             log.warning(f"Account names config file is not a valid YAML dict: {config_path}")
-                        elif 'account_names' not in config_data:
+                        elif "account_names" not in config_data:
                             log.warning(f"Account names config file missing 'account_names' key: {config_path}")
-                        elif not isinstance(config_data['account_names'], dict):
+                        elif not isinstance(config_data["account_names"], dict):
                             log.warning(f"'account_names' must be a dict in config file: {config_path}")
                         else:
                             # Validate all keys and values are strings
-                            account_data = config_data['account_names']
+                            account_data = config_data["account_names"]
                             if all(isinstance(k, str) and isinstance(v, str) for k, v in account_data.items()):
                                 mappings.update(account_data)
                                 log.debug(f"Loaded {len(account_data)} account name(s) from {config_path}")
@@ -319,11 +318,13 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         }
 
         # Account info populated later by set_handler_context() from Lambda ARN
-        context.update({
-            "aws_account_id": "Unknown",
-            "aws_account_name": "Unknown",
-            "aws_account_arn": "Unknown",
-        })
+        context.update(
+            {
+                "aws_account_id": "Unknown",
+                "aws_account_name": "Unknown",
+                "aws_account_arn": "Unknown",
+            }
+        )
 
         # Get deployment info
         context["deploy_time"] = self._get_deployment_age()
@@ -334,7 +335,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
     def _get_deployment_age(self) -> str:
         """
         Get Lambda function deployment age using AWS client factory.
-        
+
         Returns:
             Human-friendly age string
         """
@@ -370,7 +371,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
     def _detect_config_type(self) -> str:
         """
         Detect deployment configuration type.
-        
+
         Returns:
             Configuration type string
         """
@@ -459,13 +460,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         line2 = f"📍 {account_display} • {self._lambda_context['aws_region']} • {timestamp}"
         line3 = "📋 Context: Manual/Development Testing"
 
-        return [{
-            "type": "context",
-            "elements": [{
-                "type": "mrkdwn",
-                "text": f"{line1}\n{line2}\n{line3}"
-            }]
-        }]
+        return [{"type": "context", "elements": [{"type": "mrkdwn", "text": f"{line1}\n{line2}\n{line3}"}]}]
 
     def _blocks_with_header(
         self,
@@ -818,7 +813,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         text: str,
         blocks: Optional[List[Dict]] = None,
         include_lambda_header: bool = False,
-        event_type: Optional[str] = None
+        event_type: Optional[str] = None,
     ) -> bool:
         """
         Send thread reply with standardized error handling.
@@ -927,13 +922,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         return sent
 
     @handle_client_errors(default_return=False)
-    def update_message(
-        self,
-        channel: str,
-        ts: str,
-        text: str,
-        blocks: Optional[List[Dict]] = None
-    ) -> bool:
+    def update_message(self, channel: str, ts: str, text: str, blocks: Optional[List[Dict]] = None) -> bool:
         """
         Update existing message.
 
@@ -1001,21 +990,18 @@ class SlackClient(BaseClient, ServiceHealthMixin):
     def add_reaction(self, channel: str, ts: str, emoji: str) -> bool:
         """
         Add reaction emoji to message.
-        
+
         Args:
             channel: Channel ID
             ts: Message timestamp
             emoji: Emoji name (without colons)
-            
+
         Returns:
             True if successful, False otherwise
         """
+
         def _reaction_operation():
-            response = self._service_client.reactions_add(
-                channel=channel,
-                timestamp=ts,
-                name=emoji
-            )
+            response = self._service_client.reactions_add(channel=channel, timestamp=ts, name=emoji)
 
             if response["ok"]:
                 log.info("Reaction added successfully", extra={"channel": channel, "ts": ts, "emoji": emoji})
@@ -1026,11 +1012,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
 
         try:
             return self._execute_with_error_handling(
-                "add_reaction",
-                _reaction_operation,
-                channel=channel,
-                ts=ts,
-                emoji=emoji
+                "add_reaction", _reaction_operation, channel=channel, ts=ts, emoji=emoji
             )
         except SlackApiError as e:
             # Special case: already_reacted is not an error
@@ -1051,7 +1033,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
     def get_bot_info(self) -> Dict:
         """
         Get information about the Slack bot.
-        
+
         Returns:
             Dictionary with bot information
         """
@@ -1063,7 +1045,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
                     "user_id": response.get("user_id"),
                     "team": response.get("team"),
                     "team_id": response.get("team_id"),
-                    "url": response.get("url")
+                    "url": response.get("url"),
                 }
             else:
                 raise Exception(f"Auth test failed: {response.get('error')}")

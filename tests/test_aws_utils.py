@@ -9,8 +9,11 @@ class TestAWSClientFactory:
     """Tests for AWS client factory functionality."""
 
     @patch("boto3.session.Session")
-    def test_create_aws_client_default_region(self, mock_session_class):
+    def test_create_aws_client_default_region(self, mock_session_class, monkeypatch):
         """Test AWS client creation with default region."""
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+        monkeypatch.setattr("nui_shared_utils.config._default_config", None)
         from nui_shared_utils.utils import create_aws_client
 
         mock_session = Mock()
