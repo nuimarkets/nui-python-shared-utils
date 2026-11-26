@@ -8,6 +8,8 @@ that contained them.
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-11-27
+
 ### Breaking Changes
 
 - `DatabaseClient.query()` and `PostgreSQLClient.query()` raise the original exception
@@ -25,6 +27,21 @@ that contained them.
   `DatabaseClient.get_connection_info()`. Explicit MySQL credentials must give text
   fields as `str`, `bytes`, `bytearray` or `None` and `port` as an integer or `None`;
   other types raise `TypeError` at construction.
+- The installed `slack-channel-setup` executable takes the documented setup options
+  directly, such as `slack-channel-setup --config channels.yaml`. The nested
+  `slack-channel-setup slack setup-channels ...` form no longer works: drop the
+  `slack setup-channels` prefix. Python callers keep the grouped route through
+  `cli(["slack", "setup-channels", ...])`, and both commands report the installed
+  package version.
+- Cached secret retrievals expire after 300 seconds by default, where 2.x kept the
+  first retrieval for the life of the process. The first `get_secret()` call at or
+  after expiry fetches from AWS again, and a failed fetch raises instead of returning
+  the cached value. This reaches `get_jwt_public_key()` and the `get_*_credentials`
+  helpers, which use the default: a warm Lambda that looks up its key per request now
+  calls Secrets Manager every five minutes and must handle a failed lookup. To keep a
+  value for longer, fetch it once and hold it; clients and previously fetched keys
+  keep their credentials. `get_secret()` takes keyword-only `ttl_seconds` and
+  `force_refresh` to set the bound per call.
 
 ### Added
 
@@ -34,13 +51,6 @@ that contained them.
 - Keyword-only `connect_timeout` on `PostgreSQLClient`, with the existing 5-second
   default. PostgreSQL has no socket `read_timeout` option on this client.
 
-### Changed
-
-- Secret retrieval uses a default 300-second cache TTL, with keyword-only
-  `ttl_seconds` and `force_refresh` controls. Each caller applies its own freshness
-  bound; expired or forced refresh failures surface instead of returning stale
-  values. Existing clients and previously fetched keys retain their credentials.
-
 ### Fixed
 
 - MySQL pooled connections roll back unfinished transactions before reuse, including
@@ -48,20 +58,13 @@ that contained them.
   users, passwords and connection settings without exposing credentials in diagnostics.
   Clients snapshot connection credentials at construction, and recycling measures
   connection age from creation rather than the most recent return to the pool.
-
 - JWT validation rejects malformed compact encodings, non-object headers and payloads,
   and present `exp`/`nbf` values that are not finite numbers. These tokens follow the
   existing authentication error and 401 paths; absent optional time claims and the
   30-second clock-skew tolerance remain supported.
-
-- The installed `slack-channel-setup` executable accepts documented setup options
-  directly, including `--config` and `--validate-only`. Python callers retain the
-  grouped CLI route, and both commands report the installed package version.
-
 - `MetricsPublisher.flush()` removes each acknowledged batch before sending the next,
   so retrying a partial failure preserves pending samples without resending successful
   batches. A lost response can still cause duplicate samples on retry.
-
 - `SlackClient` logs a warning, once per client, when it renders a Lambda header with no
   AWS account context, naming `set_handler_context(context)` and `powertools_handler` as
   the fixes. The header itself is unchanged.
@@ -399,7 +402,8 @@ This patch release includes a breaking credential-resolution change.
 - Basic project structure
 - Python package configuration
 
-[Unreleased]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.7.0...HEAD
+[Unreleased]: https://github.com/nuimarkets/nui-python-shared-utils/compare/3.0.0...HEAD
+[3.0.0]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.7.0...3.0.0
 [2.7.0]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.6.0...2.7.0
 [2.6.0]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.5.1...2.6.0
 [2.5.1]: https://github.com/nuimarkets/nui-python-shared-utils/compare/2.5.0...2.5.1
