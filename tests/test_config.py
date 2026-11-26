@@ -248,11 +248,11 @@ class TestConfigurationPrecedence:
 
         assert config.aws_region == "primary-region"
 
-    @patch.dict(os.environ, {
-        "AWS_DEFAULT_REGION": "secondary-region",
-    })
-    def test_aws_default_region_fallback(self):
+    def test_aws_default_region_fallback(self, monkeypatch):
         """Test AWS_DEFAULT_REGION fallback."""
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+        monkeypatch.setenv("AWS_DEFAULT_REGION", "secondary-region")
         config = Config()
 
         assert config.aws_region == "secondary-region"
