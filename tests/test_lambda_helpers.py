@@ -2,7 +2,6 @@
 Tests for Lambda context helpers.
 """
 
-
 import pytest
 
 

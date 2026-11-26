@@ -1505,11 +1505,13 @@ class TestAccountNameConsistency:
 
         # Create YAML config file
         config_file = tmp_path / "slack_config.yaml"
-        config_file.write_text("""
+        config_file.write_text(
+            """
 account_names:
   "111222333444": "YAMLConfiguredAccount"
   "555666777888": "AnotherAccount"
-""")
+"""
+        )
 
         # Create client with config file
         slack = SlackClient(secret_name="test-secret", account_names_config=str(config_file))
@@ -1625,11 +1627,13 @@ account_names:
 
         # Create YAML with non-string values
         config_file = tmp_path / "invalid_types.yaml"
-        config_file.write_text("""
+        config_file.write_text(
+            """
 account_names:
   "123456789012": 12345
   "234567890123": true
-""")
+"""
+        )
 
         slack = SlackClient(secret_name="test-secret", account_names_config=str(config_file))
 
