@@ -39,7 +39,7 @@ One-call authentication for API Gateway Lambda handlers. Extracts the Bearer tok
 
 ### `validate_jwt(token, public_key) -> dict`
 
-Lower-level validation when you already have the public key. Verifies token structure, RS256 signature, and expiration.
+Lower-level validation when you already have the public key. Verifies compact-token encoding, JSON object structure, the RS256 signature, and optional `exp` and `nbf` time claims.
 
 - **token** — Raw JWT string (no `Bearer` prefix)
 - **public_key** — `rsa.PublicKey` instance
@@ -138,10 +138,19 @@ key = get_jwt_public_key(
 
 | Check | Behavior |
 |-------|----------|
-| Token structure | Must be 3 dot-separated base64url segments |
+| Token structure | Three nonempty, unpadded base64url segments using only ASCII letters, digits, `-` and `_` |
+| JSON structure | Header and payload must each decode to a JSON object |
 | Algorithm | Header `alg` must be `RS256` |
-| Signature | RSA PKCS#1 v1.5 with SHA-256 |
-| Expiration | `exp` claim checked against current time (optional — tokens without `exp` are accepted) |
+| Signature | RSA PKCS#1 v1.5 with SHA-256; payload claims are used only after signature verification |
+| Time claim types | Present `exp` and `nbf` claims must be finite numbers; null, booleans, strings, arrays and objects are rejected |
+| Expiration | Accept through `exp + 30` seconds; an absent `exp` claim is supported |
+| Not before | Accept from `nbf - 30` seconds; an absent `nbf` claim is supported |
+
+Malformed tokens raise `JWTValidationError` from `validate_jwt` and
+`AuthenticationError` from `require_auth`. `check_auth` returns its standard 401
+response for these failures. Public paths continue to bypass authentication.
+Tokens with padded or other non-base64url segments, non-object JSON, or invalid
+time-claim types must be corrected by their issuer before use.
 
 ## Dependency Details
 

@@ -13,6 +13,7 @@ import re
 import base64
 import time
 import logging
+import math
 from typing import TYPE_CHECKING, AbstractSet, Any, Dict, Optional, Tuple
 from urllib.parse import unquote
 
@@ -108,7 +109,9 @@ def validate_jwt(token: str, public_key: "rsa.PublicKey") -> dict:
     Decode and verify an RS256-signed JWT.
 
     Verifies:
-    - Token structure (3 dot-separated segments)
+    - Token structure (3 nonempty, unpadded base64url segments)
+    - Header and payload are JSON objects
+    - Present exp/nbf claims are finite JSON numbers (not booleans)
     - Algorithm is RS256
     - RSA signature using the provided public key
     - Expiration (exp claim, if present) with clock skew tolerance
@@ -132,12 +135,18 @@ def validate_jwt(token: str, public_key: "rsa.PublicKey") -> dict:
         raise JWTValidationError(f"Malformed JWT: expected 3 segments, got {len(parts)}")
 
     header_b64, payload_b64, signature_b64 = parts
+    for name, segment in zip(("header", "payload", "signature"), parts):
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", segment):
+            raise JWTValidationError(f"Invalid JWT {name} encoding: expected unpadded base64url")
 
     # Decode header and check algorithm
     try:
         header = json.loads(_base64url_decode(header_b64))
     except Exception as e:
         raise JWTValidationError(f"Invalid JWT header: {e}") from e
+
+    if not isinstance(header, dict):
+        raise JWTValidationError("Invalid JWT header: expected a JSON object")
 
     alg = header.get("alg")
     if alg != "RS256":
@@ -164,6 +173,19 @@ def validate_jwt(token: str, public_key: "rsa.PublicKey") -> dict:
         claims = json.loads(_base64url_decode(payload_b64))
     except Exception as e:
         raise JWTValidationError(f"Invalid JWT payload: {e}") from e
+
+    if not isinstance(claims, dict):
+        raise JWTValidationError("Invalid JWT payload: expected a JSON object")
+
+    for name in ("exp", "nbf"):
+        if name in claims:
+            value = claims[name]
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or (isinstance(value, float) and not math.isfinite(value))
+            ):
+                raise JWTValidationError(f"Invalid JWT {name} claim: expected a finite number")
 
     # Check expiration (with clock skew tolerance for distributed systems)
     now = time.time()

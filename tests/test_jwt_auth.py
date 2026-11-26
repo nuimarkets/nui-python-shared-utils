@@ -4,7 +4,7 @@ import json
 import time
 import base64
 import pytest
-from typing import Optional
+from typing import Any, Optional
 from unittest.mock import patch, Mock
 
 from cryptography.hazmat.primitives.asymmetric import rsa as crypto_rsa, padding
@@ -22,7 +22,6 @@ from nui_shared_utils.jwt_auth import (
     _base64url_decode,
     _normalize_path,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -73,7 +72,7 @@ def _b64url_encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
 
-def _sign_jwt(private_key, claims: dict, header: Optional[dict] = None) -> str:
+def _sign_jwt(private_key, claims: Any, header: Optional[dict] = None) -> str:
     """Create an RS256-signed JWT using the cryptography library."""
     if header is None:
         header = {"alg": "RS256", "typ": "JWT"}
@@ -184,6 +183,110 @@ class TestValidateJwt:
 
         result = validate_jwt(token, public_key)
         assert result["sub"] == "user123"
+
+
+def _assert_token_rejected(token: str, public_key, message: str) -> None:
+    """Exercise the real validator through every public authentication entry point."""
+    with pytest.raises(JWTValidationError, match=message):
+        validate_jwt(token, public_key)
+
+    event = {"path": "/private", "headers": {"Authorization": f"Bearer {token}"}}
+    with patch("nui_shared_utils.jwt_auth.get_jwt_public_key", return_value=public_key):
+        with pytest.raises(AuthenticationError, match=message):
+            require_auth(event)
+        claims, response = check_auth(event)
+
+    assert claims is None
+    assert response["statusCode"] == 401
+    assert json.loads(response["body"])["errors"][0]["detail"] == "Authentication required"
+
+
+@pytest.mark.unit
+class TestMalformedJwt:
+    @pytest.mark.parametrize("header", [[], None, True, 42, "RS256"])
+    def test_non_object_header_rejected_without_signature(self, rsa_keypair, header):
+        _, _, public_key = rsa_keypair
+        header_b64 = _b64url_encode(json.dumps(header).encode())
+        _assert_token_rejected(f"{header_b64}.e30.AA", public_key, "header")
+
+    @pytest.mark.parametrize("claims", [[], None, True, 42, "claims"])
+    def test_signed_non_object_payload_rejected(self, rsa_keypair, claims):
+        private_key, _, public_key = rsa_keypair
+        token = _sign_jwt(private_key, claims)
+        _assert_token_rejected(token, public_key, "payload")
+
+    def test_signature_verified_before_payload_shape(self, rsa_keypair, second_rsa_keypair):
+        _, _, public_key = rsa_keypair
+        token = _sign_jwt(second_rsa_keypair, [])
+        _assert_token_rejected(token, public_key, "signature verification failed")
+
+    @pytest.mark.parametrize("name", ["exp", "nbf"])
+    @pytest.mark.parametrize(
+        "value",
+        [None, False, True, "1000", [], {}, float("nan"), float("inf"), float("-inf")],
+        ids=["null", "false", "true", "string", "array", "object", "nan", "infinity", "negative-infinity"],
+    )
+    def test_invalid_present_time_claim_rejected(self, rsa_keypair, name, value):
+        private_key, _, public_key = rsa_keypair
+        token = _sign_jwt(private_key, {"sub": "user123", name: value})
+        _assert_token_rejected(token, public_key, f"Invalid JWT {name} claim")
+
+    def test_non_ascii_payload_rejected(self, rsa_keypair):
+        _, _, public_key = rsa_keypair
+        _assert_token_rejected("eyJhbGciOiJSUzI1NiJ9.é.AA", public_key, "payload")
+
+    @pytest.mark.parametrize("segment", [0, 1, 2], ids=["header", "payload", "signature"])
+    @pytest.mark.parametrize("suffix", ["!", "=", "\n", "+", "/", "é"])
+    def test_non_base64url_segments_rejected(self, rsa_keypair, segment, suffix):
+        private_key, _, public_key = rsa_keypair
+        parts = _sign_jwt(private_key, {"sub": "user123"}).split(".")
+        parts[segment] += suffix
+        if segment != 2:
+            signing_input = ".".join(parts[:2]).encode("utf-8")
+            signature = private_key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
+            parts[2] = _b64url_encode(signature)
+        name = ["header", "payload", "signature"][segment]
+        _assert_token_rejected(".".join(parts), public_key, f"Invalid JWT {name} encoding: expected unpadded base64url")
+
+    @pytest.mark.parametrize("segment", [0, 1, 2], ids=["header", "payload", "signature"])
+    def test_empty_segments_rejected(self, rsa_keypair, segment):
+        private_key, _, public_key = rsa_keypair
+        parts = _sign_jwt(private_key, {"sub": "user123"}).split(".")
+        parts[segment] = ""
+        if segment != 2:
+            signature = private_key.sign(".".join(parts[:2]).encode(), padding.PKCS1v15(), hashes.SHA256())
+            parts[2] = _b64url_encode(signature)
+        name = ["header", "payload", "signature"][segment]
+        _assert_token_rejected(".".join(parts), public_key, f"Invalid JWT {name} encoding: expected unpadded base64url")
+
+    @pytest.mark.parametrize(
+        "claims",
+        [
+            {"sub": "user123"},
+            {"exp": 970},
+            {"exp": 970.0},
+            {"nbf": 1030},
+            {"nbf": 1030.0},
+            {"exp": 10**400, "nbf": -(10**400)},
+        ],
+        ids=["absent", "exp-int-boundary", "exp-float-boundary", "nbf-int-boundary", "nbf-float-boundary", "large-int"],
+    )
+    def test_supported_time_claims_and_skew_boundaries(self, rsa_keypair, claims):
+        private_key, _, public_key = rsa_keypair
+        token = _sign_jwt(private_key, claims)
+        event = {"path": "/private", "headers": {"Authorization": f"Bearer {token}"}}
+        with patch("nui_shared_utils.jwt_auth.time.time", return_value=1000):
+            assert validate_jwt(token, public_key) == claims
+            with patch("nui_shared_utils.jwt_auth.get_jwt_public_key", return_value=public_key):
+                assert require_auth(event) == claims
+                assert check_auth(event) == (claims, None)
+
+    @pytest.mark.parametrize("claims, message", [({"exp": 969.5}, "expired"), ({"nbf": 1030.5}, "not yet valid")])
+    def test_outside_clock_skew_rejected(self, rsa_keypair, claims, message):
+        private_key, _, public_key = rsa_keypair
+        token = _sign_jwt(private_key, claims)
+        with patch("nui_shared_utils.jwt_auth.time.time", return_value=1000):
+            _assert_token_rejected(token, public_key, message)
 
 
 # ---------------------------------------------------------------------------

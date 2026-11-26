@@ -27,6 +27,11 @@ that contained them.
 
 ### Fixed
 
+- JWT validation rejects malformed compact encodings, non-object headers and payloads,
+  and present `exp`/`nbf` values that are not finite numbers. These tokens follow the
+  existing authentication error and 401 paths; absent optional time claims and the
+  30-second clock-skew tolerance remain supported.
+
 - The installed `slack-channel-setup` executable accepts documented setup options
   directly, including `--config` and `--validate-only`. Python callers retain the
   grouped CLI route, and both commands report the installed package version.
