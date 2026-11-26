@@ -105,7 +105,7 @@ After installing the package:
    - [Slack Integration](docs/guides/slack-integration.md) - Messaging, formatting, file uploads
    - [Elasticsearch Operations](docs/getting-started/quickstart.md#elasticsearch-operations) - Query builders and search
    - [Database Connections](docs/getting-started/quickstart.md#database-connections) - Connection pooling and queries
-   - [CloudWatch Metrics](docs/getting-started/quickstart.md#cloudwatch-metrics) - Performance tracking
+   - [CloudWatch Metrics](docs/getting-started/quickstart.md#5-cloudwatch-metrics) - Performance tracking
 4. **Testing** → Learn testing strategies ([guide](docs/development/testing.md))
 
 **Complete documentation**: [docs/](docs/README.md)
@@ -237,15 +237,14 @@ the `[snowflake]` extra.
 ```python
 from nui_shared_utils import MetricsPublisher, track_lambda_performance
 
-metrics = MetricsPublisher(namespace="MyApplication")
-
-@track_lambda_performance(metrics)
+@track_lambda_performance(namespace="MyApplication")
 def lambda_handler(event, context):
-    metrics.put_metric("ProcessedItems", 150, "Count")
+    with MetricsPublisher(namespace="MyApplication") as metrics:
+        metrics.put_metric("ProcessedItems", 150, "Count")
     return {"statusCode": 200}
 ```
 
-**[→ See full metrics guide](docs/getting-started/quickstart.md#cloudwatch-metrics)**
+**[→ See full metrics guide](docs/getting-started/quickstart.md#5-cloudwatch-metrics)**
 
 ### JWT Authentication
 
