@@ -8,6 +8,8 @@ Set NUI_TEST_MYSQL_PORT to its mapped port. Start the runtime with:
 
 then, once the server accepts connections, run
 NUI_TEST_MYSQL_PORT=33306 pytest tests/test_db_pool_mysql.py.
+Install the dev extra first (`pip install -e .[dev]`): MySQL 8's default
+caching_sha2_password authentication needs the `cryptography` package it provides.
 No AWS or remote database credentials are used.
 """
 

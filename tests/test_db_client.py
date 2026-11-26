@@ -827,6 +827,45 @@ class TestPoolSafety:
         assert two is not one
         assert two.settings["password"] == b"rotated-password"
 
+    def test_lone_surrogates_do_not_share_the_character_they_spell(self):
+        astral = DatabaseClient(credentials=dict(self.credentials, password="\U0001F600"))
+        surrogates = DatabaseClient(credentials=dict(self.credentials, password="\ud83d\ude00"))
+
+        assert astral._pool_key != surrogates._pool_key
+
+    @pytest.mark.parametrize("field", ["username", "password"])
+    def test_missing_credential_never_borrows_another_clients_connection(self, field):
+        import nui_shared_utils.db_client as module
+
+        explicit_none = DatabaseClient(credentials=dict(self.credentials, **{field: None}))
+        missing = DatabaseClient(credentials={k: v for k, v in self.credentials.items() if k != field})
+        with explicit_none.get_connection() as pooled:
+            pass
+
+        with pytest.raises(KeyError):
+            with missing.get_connection():
+                pass
+
+        assert [entry["connection"] for entry in module._connection_pool[explicit_none._pool_key]] == [pooled]
+
+    def test_driver_timeouts_follow_the_pool_identity_snapshot(self):
+        client = DatabaseClient(credentials=self.credentials, connect_timeout=2, read_timeout=3)
+        client.connect_timeout = 9
+        client.read_timeout = None
+        with client.get_connection() as connection:
+            pass
+
+        assert (connection.settings["connect_timeout"], connection.settings["read_timeout"]) == (2.0, 3.0)
+
+    def test_snapshot_keys_are_plain_field_names(self):
+        class Key(str):
+            pass
+
+        client = DatabaseClient(credentials={Key(name): value for name, value in self.credentials.items()})
+
+        assert all(type(name) is str for name in client._connection_credentials)
+        assert client._connection_credentials["password"] == self.credentials["password"]
+
     def test_pool_diagnostics_do_not_expose_credentials(self, caplog):
         import logging
 

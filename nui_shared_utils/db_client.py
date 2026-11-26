@@ -77,7 +77,12 @@ def get_pool_stats() -> Dict[str, Any]:
 
 def _snapshot_mysql_credentials(credentials: Dict[str, Any]) -> Dict[str, Any]:
     """Copy driver inputs to immutable values without caller-defined conversions."""
-    snapshot = dict(credentials)
+    # Literal field names, so a caller's key objects never become the snapshot's keys.
+    snapshot = {
+        field: credentials[field]
+        for field in ("host", "port", "username", "password", "database")
+        if field in credentials
+    }
     snapshot.setdefault("port", 3306)
     snapshot.setdefault("database", "app")
     for field in ("host", "username", "password", "database"):
@@ -144,21 +149,24 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
         # Snapshot once so caller mutation cannot separate pool identity from settings.
         self.credentials = dict(self.credentials)
         self._connection_credentials = _snapshot_mysql_credentials(self.credentials)
+        # Driver timeouts come from this snapshot too, so they always match the pool identity.
+        self._driver_timeouts = (self.connect_timeout, self.read_timeout)
         identity = (
             self._connection_credentials["host"],
             self._connection_credentials["port"],
             self._connection_credentials.get("username"),
             self._connection_credentials.get("password"),
             self._connection_credentials["database"],
-            self.connect_timeout,
-            self.read_timeout,
+            *self._driver_timeouts,
         )
-        # Type tags and JSON field boundaries keep byte/string values unambiguous.
+        # Type tags and JSON field boundaries keep byte/string values unambiguous. Raw code
+        # points encoded with surrogatepass keep a lone surrogate pair apart from the
+        # character it would spell, which ensure_ascii escapes identically.
         encoded_identity = json.dumps(
             [(type(value).__name__, value.hex() if type(value) is bytes else value) for value in identity],
             separators=(",", ":"),
-            ensure_ascii=True,
-        ).encode("ascii")
+            ensure_ascii=False,
+        ).encode("utf-8", "surrogatepass")
         self._pool_key = "mysql:" + hmac.digest(_pool_identity_secret, encoded_identity, "sha256").hex()
 
     @staticmethod
@@ -242,6 +250,12 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
         Pooled returns roll back any remaining transaction before reuse. A
         database override uses a separate connection that closes on exit.
         """
+        # Fail the same way on a pool hit as on a miss: a client missing either field
+        # never borrows a connection another client authenticated.
+        for field in ("username", "password"):
+            if field not in self._connection_credentials:
+                raise KeyError(field)
+
         connection = None
         created_at = None
         pool_key = self._pool_key if self.use_pool and not database else None
@@ -279,6 +293,7 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
 
             if connection is None:
                 credentials = self._connection_credentials
+                connect_timeout, read_timeout = self._driver_timeouts
                 connection = pymysql.connect(
                     host=credentials["host"],
                     port=credentials["port"],
@@ -287,8 +302,8 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
                     database=database or credentials["database"],
                     charset="utf8mb4",
                     cursorclass=pymysql.cursors.DictCursor,
-                    connect_timeout=self.connect_timeout,
-                    read_timeout=self.read_timeout,
+                    connect_timeout=connect_timeout,
+                    read_timeout=read_timeout,
                 )
                 created_at = time.monotonic()
                 if pool_key:

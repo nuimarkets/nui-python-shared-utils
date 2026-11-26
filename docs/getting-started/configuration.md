@@ -410,8 +410,10 @@ and preserves any exception from the borrower. Commit writes explicitly inside
 `get_connection()`; the context manager never commits them for you. `execute()` and
 `bulk_insert()` commit their successful writes.
 
-`pool_recycle` limits total connection age from creation across repeated borrows. A
-connection at or beyond that age closes instead of returning to the pool; a nonpositive
+`pool_recycle` is the age from creation at which a pooled connection is discarded. The
+age is checked when a connection is borrowed and when it returns, so a connection can
+stay open past it while borrowed or idle in the pool. A connection at or beyond that age
+closes instead of returning to the pool; a nonpositive
 value disables age-based recycling. `aged_connections` in pool statistics counts
 connections created more than one hour ago. `pool_size` is checked when a client returns
 its connection. Clients with the same identity share a pool even when their limits differ;

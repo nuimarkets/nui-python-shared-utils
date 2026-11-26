@@ -100,7 +100,7 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
         secret_name: Optional[str] = None,              # Override secret name
         use_pool: bool = True,                          # Enable connection pooling
         pool_size: int = 5,                             # Maximum pooled connections
-        pool_recycle: int = 3600,                       # Maximum connection age from creation, in seconds
+        pool_recycle: int = 3600,                       # Discard age from creation, checked at borrow and return; <= 0 disables
         credentials: Optional[Dict[str, Any]] = None,   # Explicit credentials, skips env vars and Secrets Manager
         *,
         connect_timeout: float = 10,                    # Seconds to establish a connection
