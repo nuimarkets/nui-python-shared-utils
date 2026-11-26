@@ -14,16 +14,12 @@ import pytest
 pytestmark = pytest.mark.unit
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-OPEN_FENCE = re.compile(r"^\s*```(?:python|py)\s*$")
-CLOSE_FENCE = re.compile(r"^\s*```\s*$")
+FENCE = re.compile(r"^(?P<indent>[ \t]*)(?P<marker>`{3,}|~{3,})(?P<info>.*)$")
+PYTHON_LANGUAGES = {"python", "py"}
 
 
 def _markdown_files():
     return sorted([*REPO_ROOT.glob("*.md"), *(REPO_ROOT / "docs").rglob("*.md")])
-
-
-def _leading_whitespace(line):
-    return line[: len(line) - len(line.lstrip(" \t"))]
 
 
 def _strip_fence_indent(line, fence_indent):
@@ -38,18 +34,30 @@ def _strip_fence_indent(line, fence_indent):
 
 def _python_blocks(path):
     """Yield (opening fence line number, block source) for each python block in ``path``."""
+    # Every fenced block is tracked, python or not, so a fence-like line inside another
+    # block is that block's content. A block closes on a bare fence of its own character
+    # at least as long as its opener (CommonMark).
     block = None
     for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        fence = FENCE.match(line)
         if block is None:
-            if OPEN_FENCE.match(line):
-                block = (number, _leading_whitespace(line), [])
-        elif CLOSE_FENCE.match(line):
-            yield block[0], "\n".join(block[2])
+            if fence and not (fence["marker"][0] == "`" and "`" in fence["info"]):
+                info = fence["info"].split()
+                is_python = bool(info) and info[0] in PYTHON_LANGUAGES
+                block = (number, fence["indent"], fence["marker"], is_python, [])
+        elif (
+            fence
+            and not fence["info"].strip()
+            and fence["marker"][0] == block[2][0]
+            and len(fence["marker"]) >= len(block[2])
+        ):
+            if block[3]:
+                yield block[0], "\n".join(block[4])
             block = None
-        else:
-            block[2].append(_strip_fence_indent(line, block[1]))
+        elif block[3]:
+            block[4].append(_strip_fence_indent(line, block[1]))
     if block is not None:
-        raise AssertionError(f"{path.relative_to(REPO_ROOT)}:{block[0]}: python fence is never closed")
+        raise AssertionError(f"{path.relative_to(REPO_ROOT)}:{block[0]}: fence is never closed")
 
 
 def _cases():
@@ -91,3 +99,19 @@ def test_fence_indentation_is_stripped_and_nothing_more(tmp_path, markdown, pars
     else:
         with pytest.raises(SyntaxError):
             ast.parse(source)
+
+
+@pytest.mark.parametrize(
+    "markdown, expected",
+    [
+        pytest.param("~~~python\nx = 1\n~~~\n", ["x = 1"], id="tilde-fence"),
+        pytest.param("````python\nx = 1\n````\n", ["x = 1"], id="long-backtick-fence"),
+        pytest.param("```python\nx = 1\n````\n", ["x = 1"], id="longer-closing-fence"),
+        pytest.param("````text\n```python\nbad(:\n```\n````\n", [], id="python-fence-inside-text-fence"),
+        pytest.param("```markdown\n```python\nbad(:\n```\n", [], id="python-info-line-is-content"),
+    ],
+)
+def test_fences_follow_commonmark(tmp_path, markdown, expected):
+    path = tmp_path / "doc.md"
+    path.write_text(markdown, encoding="utf-8")
+    assert [source for _, source in _python_blocks(path)] == expected
