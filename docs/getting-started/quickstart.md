@@ -178,6 +178,7 @@ or thread safety.
 
 ```python
 import os
+from datetime import datetime, timezone
 import nui_shared_utils as nui
 
 # Configure once at module level
@@ -215,15 +216,17 @@ def lambda_handler(event, context):
             processed += 1
         
         # Log to Elasticsearch
-        es.index_document(
-            index="application-logs",
-            body={
-                "timestamp": nui.nz_time().isoformat(),
+        indexed, failed = es.streaming_bulk(iter([{
+            "_index": "application-logs",
+            "_source": {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "level": "INFO",
                 "message": f"Processed {processed} records",
                 "function_name": context.function_name
             }
-        )
+        }]), raise_on_error=True)
+        if indexed != 1 or failed:
+            raise RuntimeError("Application log indexing failed")
         
         # Send notification
         slack.send_message(
