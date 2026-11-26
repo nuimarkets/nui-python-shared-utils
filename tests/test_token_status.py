@@ -1178,8 +1178,9 @@ class TestNeverRaises:
         ids=["huge-int", "huge-negative-int", "inf", "nan", "1e308"],
     )
     def test_an_extreme_exp_still_applies_the_answer(self, issuer, monkeypatch, clock, exp):
-        # validate_jwt accepts each of these (a huge int, a JSON Infinity or NaN), so the
-        # guard must not trade the issuer's answer for an arithmetic error.
+        # validate_jwt accepts a huge int and 1e308 and refuses the rest, but should_reject_token
+        # is public and may be handed any of them, so the guard must not trade the issuer's
+        # answer for an arithmetic error.
         configure(monkeypatch, mode="enforce", fail="open")
         issuer.status_default = answer(False)
         claims = claims_for(clock)
