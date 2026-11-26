@@ -260,9 +260,9 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
 
                     try:
                         conn.ping(reconnect=False)
-                    except Exception:
+                    except Exception as ping_error:
                         safe_close_connection(conn)
-                        log.debug(f"Closed dead pooled connection for {pool_key}")
+                        log.debug(f"Closed dead pooled connection ({type(ping_error).__name__}) for {pool_key}")
                         continue
 
                     # A slow health check can cross the recycle boundary.
@@ -312,10 +312,13 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
                             log.debug(f"Returned connection to pool {pool_key} " f"(pool size: {len(pool_entries)})")
                         else:
                             safe_close_connection(connection)
-                    except Exception:
+                    except Exception as cleanup_error:
                         # Cleanup must not replace an exception from the borrower.
                         safe_close_connection(connection)
-                        log.debug(f"Connection cleanup failed; discarded connection for {pool_key}")
+                        log.debug(
+                            f"Connection cleanup failed ({type(cleanup_error).__name__}); "
+                            f"discarded connection for {pool_key}"
+                        )
                 else:
                     safe_close_connection(connection)
 

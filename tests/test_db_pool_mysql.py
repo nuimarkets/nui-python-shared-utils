@@ -1,8 +1,14 @@
 """Opt-in checks against a disposable localhost MySQL 8 runtime.
 
-Set NUI_TEST_MYSQL_PORT to its mapped port. The runtime must expose database
-audit_pool_test and root password audit-pool-synthetic, as used by the lane's
-validation recipe. No AWS or remote database credentials are used.
+Set NUI_TEST_MYSQL_PORT to its mapped port. Start the runtime with:
+
+    docker run --rm -d -p 127.0.0.1:33306:3306 \
+        -e MYSQL_ROOT_PASSWORD=audit-pool-synthetic \
+        -e MYSQL_DATABASE=audit_pool_test mysql:8.0
+
+then, once the server accepts connections, run
+NUI_TEST_MYSQL_PORT=33306 pytest tests/test_db_pool_mysql.py.
+No AWS or remote database credentials are used.
 """
 
 import os
