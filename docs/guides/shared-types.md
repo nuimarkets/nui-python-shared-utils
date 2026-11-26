@@ -105,7 +105,7 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
         *,
         connect_timeout: float = 10,                    # Seconds to establish a connection
         read_timeout: Optional[float] = 30,             # Seconds per socket read; None disables the limit
-        **kwargs,                                       # Stored in client_config; this client reads none
+        **kwargs,                                       # config_key_prefix for BaseClient; the rest is kept in client_config, with no effect
     ): ...
 
     def query(self, sql: str, params: Optional[tuple] = None, database: Optional[str] = None) -> Sequence[Dict]: ...
@@ -167,7 +167,7 @@ class PostgreSQLClient(BaseClient, ServiceHealthMixin):
         credentials: Optional[Dict[str, Any]] = None,   # Explicit credentials, skips env vars and Secrets Manager
         *,
         connect_timeout: int = 5,                       # Integer seconds to connect, per host
-        **kwargs,                                       # Stored in client_config; this client reads none
+        **kwargs,                                       # config_key_prefix for BaseClient; the rest is kept in client_config, with no effect
     ): ...
 
     def query(self, sql: str, params: Optional[tuple] = None, database: Optional[str] = None) -> List[Dict]: ...
@@ -189,8 +189,9 @@ class ElasticsearchClient(BaseClient, ServiceHealthMixin):
         secret_name: Optional[str] = None,              # Override secret name
         credentials: Optional[Dict[str, Any]] = None,   # Explicit credentials, skips credential env vars and
         # Secrets Manager; a "host" key still ranks below ES_HOST
-        **kwargs,                                       # Client configuration, read with these defaults:
-        # scheme="http", request_timeout=30, max_retries=3, retry_on_timeout=True
+        **kwargs,                                       # config_key_prefix for BaseClient; the rest is kept in
+        # client_config and read with these defaults: scheme="http", request_timeout=30, max_retries=3,
+        # retry_on_timeout=True
     ): ...
 
     def search(self, index: str, body: Dict, size: int = 100) -> List[Dict]: ...  # Returns _source documents
@@ -259,7 +260,7 @@ class SlackClient(BaseClient, ServiceHealthMixin):
         account_names_config: Optional[str] = None,      # Path to YAML config
         service_name: Optional[str] = None,              # Display name for messages
         credentials: Optional[Dict[str, Any]] = None,    # Explicit credentials, skips env vars and Secrets Manager
-        **kwargs,                                        # Stored in client_config; this client reads none
+        **kwargs,                                        # config_key_prefix for BaseClient; the rest is kept in client_config, with no effect
     ): ...
 
     def send_message(
