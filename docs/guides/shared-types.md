@@ -6,19 +6,21 @@ This document describes the core types, interfaces, and data structures provided
 
 ### Config
 
-Central configuration class for environment-based settings.
+Central configuration class for environment-based settings, imported with
+`from nui_shared_utils import Config, configure`. The client and function blocks in this
+guide are signature references, written as stubs; an example call follows the
+signature where the call shape is not obvious from it.
 
 ```python
-from nui_shared_utils import Config, configure
-
-# Configuration fields
-Config(
-    es_host: str                     # Elasticsearch host (default: localhost:9200)
-    es_credentials_secret: str       # AWS secret name for ES credentials
-    db_credentials_secret: str       # AWS secret name for database credentials
-    slack_credentials_secret: str    # AWS secret name for Slack credentials
-    aws_region: str                  # AWS region (default: us-east-1)
-)
+class Config:
+    def __init__(
+        self,
+        es_host: Optional[str] = None,                   # Elasticsearch host (default: localhost:9200)
+        es_credentials_secret: Optional[str] = None,     # AWS secret name for ES credentials
+        db_credentials_secret: Optional[str] = None,     # AWS secret name for database credentials
+        slack_credentials_secret: Optional[str] = None,  # AWS secret name for Slack credentials
+        aws_region: Optional[str] = None,                # AWS region (default: us-east-1)
+    ): ...
 
 # Environment variable precedence
 # ES_HOST or ELASTICSEARCH_HOST → es_host
@@ -75,36 +77,58 @@ migrate to `with_retry`, since the warning raises before the operation executes.
 Deprecated in 2.7.0; it will not be removed before 3.0.
 
 ```python
-execute_with_retry(
-    operation_func: Callable,
-    operation_name: str,
-    max_attempts: int = 3,
-    **retry_kwargs
-) -> Any
+class RetryableOperationMixin:
+    def execute_with_retry(
+        self,
+        operation_func,
+        operation_name: str,
+        max_attempts: int = 3,
+        **retry_kwargs,
+    ): ...
 ```
 
 ## Database Types
 
 ### DatabaseClient
 
-MySQL client with connection pooling.
+MySQL client with connection pooling, imported with `from nui_shared_utils import DatabaseClient`.
+
+```python
+class DatabaseClient(BaseClient, ServiceHealthMixin):
+    def __init__(
+        self,
+        secret_name: Optional[str] = None,              # Override secret name
+        use_pool: bool = True,                          # Enable connection pooling
+        pool_size: int = 5,                             # Maximum pooled connections
+        pool_recycle: int = 3600,                       # Recycle connections after seconds
+        credentials: Optional[Dict[str, Any]] = None,   # Explicit credentials, skips env vars and Secrets Manager
+        *,
+        connect_timeout: float = 10,                    # Seconds to establish a connection
+        read_timeout: Optional[float] = 30,             # Seconds per socket read; None disables the limit
+        **kwargs,                                       # config_key_prefix for BaseClient; the rest is kept in client_config, with no effect
+    ): ...
+
+    def query(self, sql: str, params: Optional[tuple] = None, database: Optional[str] = None) -> Sequence[Dict]: ...
+    def execute(self, sql: str, params: Optional[tuple] = None, database: Optional[str] = None) -> int: ...  # affected rows
+    def bulk_insert(
+        self,
+        table: str,
+        records: List[Dict],
+        database: Optional[str] = None,
+        batch_size: int = 1000,
+        ignore_duplicates: bool = False,
+    ) -> int: ...
+    def health_check(self) -> Dict[str, Any]: ...
+    def get_connection_info(self) -> Dict: ...
+```
+
+Example call:
 
 ```python
 from nui_shared_utils import DatabaseClient
 
-client = DatabaseClient(
-    secret_name: str = None,          # Override secret name
-    use_pool: bool = True,            # Enable connection pooling
-    pool_size: int = 5,               # Maximum pooled connections
-    pool_recycle: int = 3600          # Recycle connections after seconds
-)
-
-# Methods
-client.query(sql, params=None, database=None) -> List[Dict]
-client.execute(sql, params=None, database=None) -> int  # affected rows
-client.bulk_insert(table, records, database=None, batch_size=1000, ignore_duplicates=False) -> int
-client.health_check() -> Dict
-client.get_connection_info() -> Dict
+client = DatabaseClient(secret_name="prod/db-credentials", pool_size=10, read_timeout=60)
+rows = client.query("SELECT id, name FROM users WHERE id = %s", (42,))
 ```
 
 **Connection Pool Entry Structure:**
@@ -132,47 +156,63 @@ client.get_connection_info() -> Dict
 
 ### PostgreSQLClient
 
-PostgreSQL client with connection management.
+PostgreSQL client with connection management, imported with `from nui_shared_utils import PostgreSQLClient`.
 
 ```python
-from nui_shared_utils import PostgreSQLClient
+class PostgreSQLClient(BaseClient, ServiceHealthMixin):
+    def __init__(
+        self,
+        secret_name: Optional[str] = None,
+        use_auth_credentials: bool = True,              # Use auth-specific credentials from secret
+        credentials: Optional[Dict[str, Any]] = None,   # Explicit credentials, skips env vars and Secrets Manager
+        *,
+        connect_timeout: int = 5,                       # Integer seconds to connect, per host
+        **kwargs,                                       # config_key_prefix for BaseClient; the rest is kept in client_config, with no effect
+    ): ...
 
-client = PostgreSQLClient(
-    secret_name: str = None,
-    use_auth_credentials: bool = True  # Use auth-specific credentials from secret
-)
-
-# Methods
-client.query(sql, params=None, database=None) -> List[Dict]
-client.health_check() -> Dict
+    def query(self, sql: str, params: Optional[tuple] = None, database: Optional[str] = None) -> List[Dict]: ...
+    def health_check(self) -> Dict[str, Any]: ...
 ```
 
 ## Elasticsearch Types
 
 ### ElasticsearchClient
 
-Elasticsearch client with standardized query patterns.
+Elasticsearch client with standardized query patterns, imported with
+`from nui_shared_utils import ElasticsearchClient`.
+
+```python
+class ElasticsearchClient(BaseClient, ServiceHealthMixin):
+    def __init__(
+        self,
+        host: Optional[str] = None,                     # Override ES host
+        secret_name: Optional[str] = None,              # Override secret name
+        credentials: Optional[Dict[str, Any]] = None,   # Explicit credentials, skips credential env vars and
+        # Secrets Manager; a "host" key still ranks below ES_HOST
+        **kwargs,                                       # config_key_prefix for BaseClient; the rest is kept in
+        # client_config and read with these defaults: scheme="http", request_timeout=30, max_retries=3,
+        # retry_on_timeout=True
+    ): ...
+
+    def search(self, index: str, body: Dict, size: int = 100) -> List[Dict]: ...  # Returns _source documents
+    def aggregate(self, index: str, body: Dict) -> Dict[str, Any]: ...  # Returns aggregations
+    def count(self, index: str, body: Optional[Dict[str, Any]] = None) -> int: ...
+    def get_service_stats(self, service: str, hours: int = 24, index_prefix: str = "logs") -> Dict[str, Any]: ...
+    def get_recent_errors(self, service: str, hours: int = 1, limit: int = 10, index_prefix: str = "logs") -> List[Dict]: ...
+    def get_cluster_info(self) -> Dict: ...
+    def get_indices_info(self, pattern: str = "*") -> List[Dict]: ...
+```
+
+The full host and credential order is in
+[credential resolution precedence](../getting-started/configuration.md#credential-resolution-precedence).
+
+Example call:
 
 ```python
 from nui_shared_utils import ElasticsearchClient
 
-client = ElasticsearchClient(
-    host: str = None,                 # Override ES host
-    secret_name: str = None,          # Override secret name
-    scheme: str = "http",             # URL scheme
-    request_timeout: int = 30,
-    max_retries: int = 3,
-    retry_on_timeout: bool = True
-)
-
-# Methods
-client.search(index, body, size=100) -> List[Dict]        # Returns _source documents
-client.aggregate(index, body) -> Dict[str, Any]           # Returns aggregations
-client.count(index, body=None) -> int
-client.get_service_stats(service, hours=24, index_prefix="logs") -> Dict
-client.get_recent_errors(service, hours=1, limit=10, index_prefix="logs") -> List[Dict]
-client.get_cluster_info() -> Dict
-client.get_indices_info(pattern="*") -> List[Dict]
+client = ElasticsearchClient(host="localhost:9200", request_timeout=60)
+hits = client.search("logs-*", {"query": {"match": {"level": "ERROR"}}}, size=20)
 ```
 
 **Service Stats Response:**
@@ -208,26 +248,53 @@ client.get_indices_info(pattern="*") -> List[Dict]
 
 ### SlackClient
 
-Slack messaging client with Lambda context integration.
+Slack messaging client with Lambda context integration, imported with
+`from nui_shared_utils import SlackClient`.
 
 ```python
-from nui_shared_utils import SlackClient
+class SlackClient(BaseClient, ServiceHealthMixin):
+    def __init__(
+        self,
+        secret_name: Optional[str] = None,
+        account_names: Optional[Dict[str, str]] = None,  # AWS account ID → display name
+        account_names_config: Optional[str] = None,      # Path to YAML config
+        service_name: Optional[str] = None,              # Display name for messages
+        credentials: Optional[Dict[str, Any]] = None,    # Explicit credentials, skips env vars and Secrets Manager
+        **kwargs,                                        # config_key_prefix for BaseClient; the rest is kept in client_config, with no effect
+    ): ...
 
-client = SlackClient(
-    secret_name: str = None,
-    account_names: Dict[str, str] = None,      # AWS account ID → display name
-    account_names_config: str = None,          # Path to YAML config
-    service_name: str = None                   # Display name for messages
-)
-
-# Methods
-client.send_message(channel, text, blocks=None, include_lambda_header=True, event_type=None) -> bool
-client.send_file(channel, content, filename, title=None) -> bool
-client.send_thread_reply(channel, thread_ts, text, blocks=None, include_lambda_header=False, event_type=None) -> bool
-client.update_message(channel, ts, text, blocks=None) -> bool
-client.add_reaction(channel, ts, emoji) -> bool
-client.health_check() -> Dict
-client.get_bot_info() -> Dict
+    def send_message(
+        self,
+        channel: str,
+        text: str,
+        blocks: Optional[List[Dict]] = None,
+        attachments: Optional[List[Dict]] = None,
+        include_lambda_header: bool = True,
+        event_type: Optional[str] = None,
+        unfurl_links: Optional[bool] = None,
+        unfurl_media: Optional[bool] = None,
+    ) -> bool: ...
+    def send_file(
+        self,
+        channel: str,
+        content: Union[str, bytes],
+        filename: str,
+        title: Optional[str] = None,
+        thread_ts: Optional[str] = None,
+    ) -> bool: ...
+    def send_thread_reply(
+        self,
+        channel: str,
+        thread_ts: str,
+        text: str,
+        blocks: Optional[List[Dict]] = None,
+        include_lambda_header: bool = False,
+        event_type: Optional[str] = None,
+    ) -> bool: ...
+    def update_message(self, channel: str, ts: str, text: str, blocks: Optional[List[Dict]] = None) -> bool: ...
+    def add_reaction(self, channel: str, ts: str, emoji: str) -> bool: ...
+    def health_check(self) -> Dict[str, Any]: ...
+    def get_bot_info(self) -> Dict: ...
 ```
 
 **Lambda Context Structure:**
@@ -356,22 +423,36 @@ def my_function(): ...
 
 ### MetricsPublisher
 
-CloudWatch metrics publisher with batching.
+CloudWatch metrics publisher with batching, imported with `from nui_shared_utils import MetricsPublisher`.
 
 ```python
-from nui_shared_utils import MetricsPublisher
+class MetricsPublisher:
+    def __init__(
+        self,
+        namespace: str,
+        dimensions: Optional[Dict[str, str]] = None,
+        auto_flush_size: int = 20,
+        region: Optional[str] = None,
+    ): ...
 
-publisher = MetricsPublisher(
-    namespace: str,
-    dimensions: Dict[str, str] = None,
-    auto_flush_size: int = 20,
-    region: str = None
-)
-
-# Methods
-publisher.put_metric(metric_name, value, unit="None", timestamp=None, dimensions=None, storage_resolution=60)
-publisher.put_metric_with_statistics(metric_name, values: List, unit="None", timestamp=None, dimensions=None)
-publisher.flush() -> bool
+    def put_metric(
+        self,
+        metric_name: str,
+        value: Union[int, float],
+        unit: str = "None",
+        timestamp: Optional[datetime] = None,
+        dimensions: Optional[Dict[str, str]] = None,
+        storage_resolution: int = 60,
+    ) -> None: ...
+    def put_metric_with_statistics(
+        self,
+        metric_name: str,
+        values: List[Union[int, float]],
+        unit: str = "None",
+        timestamp: Optional[datetime] = None,
+        dimensions: Optional[Dict[str, str]] = None,
+    ) -> None: ...
+    def flush(self) -> bool: ...
 ```
 
 **Metric Data Structure (internal buffer):**
@@ -477,29 +558,22 @@ with TimedMetric(publisher, "DatabaseQuery", unit="Milliseconds", dimensions=Non
 
 ### Secrets Helper Functions
 
-```python
-from nui_shared_utils import (
-    get_secret,
-    get_database_credentials,
-    get_elasticsearch_credentials,
-    get_slack_credentials,
-    get_api_key,
-    clear_cache
-)
+All six are importable from `nui_shared_utils`.
 
+```python
 # Generic secret retrieval (300-second cache, per-call freshness controls)
-get_secret(secret_name: str, *, ttl_seconds: float = 300, force_refresh: bool = False) -> Dict
+def get_secret(secret_name: str, *, ttl_seconds: float = 300, force_refresh: bool = False) -> Dict: ...
 
 # Typed credential retrieval with field normalization
-get_database_credentials(secret_name: str = None) -> Dict
-get_elasticsearch_credentials(secret_name: str = None) -> Dict
-get_slack_credentials(secret_name: str = None) -> Dict
+def get_database_credentials(secret_name: Optional[str] = None) -> Dict: ...
+def get_elasticsearch_credentials(secret_name: Optional[str] = None) -> Dict: ...
+def get_slack_credentials(secret_name: Optional[str] = None) -> Dict: ...
 
 # Simple API key retrieval
-get_api_key(secret_name: str, key_field: str = "api_key") -> str
+def get_api_key(secret_name: str, key_field: str = "api_key") -> str: ...
 
 # Cache management
-clear_cache()  # Clear cached values and retrieval ages
+def clear_cache() -> None: ...  # Clear cached values and retrieval ages
 ```
 
 Each `get_secret` caller applies its own finite, nonnegative TTL to the entry's
