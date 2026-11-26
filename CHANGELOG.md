@@ -16,6 +16,15 @@ that contained them.
   their existing shapes, including MySQL's empty tuple and PostgreSQL's empty list.
   See [database error handling](docs/getting-started/quickstart.md#2-database-operations)
   for a migration example.
+- Pooled `DatabaseClient.get_connection()` borrowers must commit their writes before the
+  context exits. The pool rolls back unfinished transactions on return, so writes that
+  previously reached the database through a later borrower's commit are now discarded.
+  `execute()` and `bulk_insert()` still commit their successful writes.
+- `get_pool_stats()` pool keys are opaque per-process identifiers instead of
+  `host:port_database` strings; read connection details from
+  `DatabaseClient.get_connection_info()`. Explicit MySQL credentials must give text
+  fields as `str`, `bytes`, `bytearray` or `None` and `port` as an integer or `None`;
+  other types raise `TypeError` at construction.
 
 ### Added
 
@@ -33,6 +42,12 @@ that contained them.
   values. Existing clients and previously fetched keys retain their credentials.
 
 ### Fixed
+
+- MySQL pooled connections roll back unfinished transactions before reuse, including
+  SELECT-only transactions, and close if cleanup fails. Pool identities separate
+  users, passwords and connection settings without exposing credentials in diagnostics.
+  Clients snapshot connection credentials at construction, and recycling measures
+  connection age from creation rather than the most recent return to the pool.
 
 - JWT validation rejects malformed compact encodings, non-object headers and payloads,
   and present `exp`/`nbf` values that are not finite numbers. These tokens follow the

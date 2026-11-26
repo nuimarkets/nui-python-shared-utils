@@ -106,6 +106,24 @@ Timeouts limit connection attempts or socket reads, not the total query or Lambd
 invocation. See [database timeout settings](configuration.md#database-timeouts) for
 supported values and PostgreSQL's connection-only limit.
 
+Pooled connections roll back unfinished work on exit, including SELECT-only
+transactions. Commit writes before leaving a borrowed connection:
+
+```python
+def set_user_active(user_id: int, active: bool):
+    db = nui.DatabaseClient()
+    with db.get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("UPDATE users SET active = %s WHERE id = %s", (active, user_id))
+        conn.commit()
+```
+
+`db.execute()` and `db.bulk_insert()` commit their successful writes. A failed
+borrower cannot leave pending work for a later borrower to commit. Connections with
+different credentials or timeout settings use separate pools, and `pool_recycle` measures their age from
+creation. See [MySQL connection pooling](configuration.md#mysql-connection-pooling)
+for cleanup, credential snapshot and database-override behavior.
+
 ### 3. Elasticsearch Search
 
 ```python
@@ -195,6 +213,7 @@ or thread safety.
 ### 6. Complete Lambda Function Example
 
 ```python
+import json
 import os
 from datetime import datetime, timezone
 import nui_shared_utils as nui
@@ -226,8 +245,9 @@ def process_records(event, context):
             with conn.cursor() as cursor:
                 cursor.execute(
                     "INSERT INTO processed_records (data) VALUES (%s)",
-                    (record,)
+                    (json.dumps(record),)
                 )
+            conn.commit()
 
         processed += 1
 

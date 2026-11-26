@@ -386,6 +386,46 @@ slack_creds = nui.get_slack_credentials("custom-slack-secret")
 api_keys = nui.get_secret("my-service/api-keys")
 ```
 
+### MySQL Connection Pooling
+
+`DatabaseClient` pools connections within the current process by host, port, database,
+authenticated user, password and timeout settings. Pool identifiers in `get_pool_stats()` and debug logs
+are opaque process-local values; they contain no usernames or passwords. The client
+snapshots its connection credentials at construction, so later edits to the original
+credentials dictionary do not change its connection settings. String and bytes subclasses
+use their underlying values; mutable bytearray values are copied to immutable bytes.
+Connection text fields accept strings, bytes, bytearrays or `None`; the port accepts an
+integer or `None`. Other value types raise `TypeError` during construction.
+
+Construct a new client to adopt changed credentials. For a Secrets Manager secret that
+keeps its name, a new client reads the cached value until that entry is older than the
+default 300-second TTL (see [Secret Cache Freshness](#secret-cache-freshness)). To adopt
+a rotated value immediately, call `nui_shared_utils.secrets_helper.clear_cache()` before
+constructing the client. Fresh explicit credentials and `DB_*` environment values do not
+use the secrets cache.
+
+Every pooled return rolls back any unfinished transaction, including a SELECT-only
+transaction, before checking connection health. Cleanup failure closes the connection
+and preserves any exception from the borrower. Commit writes explicitly inside
+`get_connection()`; the context manager never commits them for you. `execute()` and
+`bulk_insert()` commit their successful writes.
+
+`pool_recycle` is the age from creation at which a pooled connection is discarded. The
+age is checked when a connection is borrowed and when it returns, so a connection can
+stay open past it while borrowed or idle in the pool. A connection at or beyond that age
+closes instead of returning to the pool; a nonpositive
+value disables age-based recycling. `aged_connections` in pool statistics counts
+connections created more than one hour ago. `pool_size` is checked when a client returns
+its connection. Clients with the same identity share a pool even when their limits differ;
+a smaller limit can close that client's returned connection while other idle connections
+remain. A `database=` override bypasses pooling and closes its connection on exit.
+Rollback ends transactions but does not reset arbitrary SQL session state, including a
+selected database changed with `USE`. Use `database=` for a separate database connection.
+
+The process-wide pool and its health statistics have no synchronization for concurrent
+threads. Do not share pooled operations or call `get_pool_stats()` concurrently across
+threads; use `use_pool=False` with separate connections for concurrent work.
+
 ## Environment-Specific Configuration
 
 ### Development Environment
