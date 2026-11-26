@@ -13,6 +13,7 @@ import socket
 import ssl
 import threading
 import time
+from types import SimpleNamespace
 from typing import Any, Callable, List, Optional
 
 import pytest
@@ -21,6 +22,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
+from nui_shared_utils import secrets_helper
 from nui_shared_utils import token_status as ts
 from nui_shared_utils.jwt_auth import AuthenticationError, check_auth, require_auth, validate_jwt
 from nui_shared_utils.token_status import HttpResponse, OversizedResponse, TokenStatus, TransportError
@@ -930,6 +932,28 @@ class TestClientCredentialsSecret:
         result = check(clock)
 
         assert (result.reason, result.detail) == ("machine_token", "credentials_secret")
+
+    @pytest.mark.parametrize("age, reads, client_id", [(299, 1, "secret-client"), (300, 2, "rotated-client")])
+    def test_a_token_fetch_reads_a_new_secret_300_seconds_after_the_last_read(
+        self, issuer, from_secret, clock, monkeypatch, age, reads, client_id
+    ):
+        # get_secret keeps a read for 300 seconds; each machine-token fetch asks it again.
+        secrets_now = [1_000.0]
+        monkeypatch.setattr(secrets_helper, "time", SimpleNamespace(monotonic=lambda: secrets_now[0]))
+        issuer.token_queue = [token_response("first", expires_in=2 * 86_400)]
+        check(clock, jti="j1")
+        from_secret.get_secret_value.return_value = {
+            "SecretString": json.dumps({"client_id": "rotated-client", "client_secret": "rotated-value-31"})
+        }
+        secrets_now[0] += age
+        clock.advance(2 * 86_400)
+
+        assert check(clock, jti="j2").status is TokenStatus.ACTIVE
+
+        assert from_secret.get_secret_value.call_count == reads
+        assert issuer.token_calls[1]["body"].startswith(
+            f"grant_type=client_credentials&client_id={client_id}&".encode()
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -238,7 +238,7 @@ answers 401 as for any other invalid token.
 | `TOKEN_STATUS_TOKEN_URL` | unset | OAuth 2 token endpoint for this service's client-credentials grant |
 | `TOKEN_STATUS_CLIENT_ID` | unset | OAuth client ID. Used with `TOKEN_STATUS_CLIENT_SECRET` when both are set. |
 | `TOKEN_STATUS_CLIENT_SECRET` | unset | OAuth client secret |
-| `TOKEN_STATUS_CREDENTIALS_SECRET` | unset | When the two above are not both set: a Secrets Manager secret, `{"client_id": "...", "client_secret": "..."}`, read through `get_secret` and cached for the life of the process |
+| `TOKEN_STATUS_CREDENTIALS_SECRET` | unset | When the two above are not both set: a Secrets Manager secret, `{"client_id": "...", "client_secret": "..."}`, read through `get_secret`, which keeps a read for 300 seconds |
 
 | Mode | Cache read and call | Refuses |
 | --- | --- | --- |
@@ -254,8 +254,9 @@ The machine token is fetched on the first check that misses the cache, with a fo
 `grant_type=client_credentials` request, and reused until a day before it expires (from `expires_in`). A
 refetch while the current token is still valid gets only half the time left, and if it fails the current one is
 used and a warning is logged, so a stalled token endpoint still leaves time for the status call. A client
-whose tokens live a day or less is therefore refetched on every check that misses the cache. A new client secret
-in Secrets Manager reaches a warm process only after it restarts.
+whose tokens live a day or less is therefore refetched on every check that misses the cache. With
+`TOKEN_STATUS_CREDENTIALS_SECRET`, each fetch reads that secret through `get_secret`, so a new client secret is
+used from the first fetch 300 seconds or more after the last read.
 
 With a Secrets Manager secret, the Lambda role needs `secretsmanager:GetSecretValue` on it, as for the JWT
 public key.

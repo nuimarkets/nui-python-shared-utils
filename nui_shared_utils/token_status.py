@@ -768,7 +768,7 @@ def _client_credentials(deadline: float) -> Tuple[str, str]:
     ``TOKEN_STATUS_CLIENT_ID`` plus ``TOKEN_STATUS_CLIENT_SECRET``, else the
     ``client_id`` and ``client_secret`` fields of the Secrets Manager secret
     named by ``TOKEN_STATUS_CREDENTIALS_SECRET``. The secret is read through
-    ``get_secret`` (cached per process) inside the check's deadline.
+    ``get_secret``, which keeps a read for 300 seconds, inside the check's deadline.
     """
     client_id = os.environ.get("TOKEN_STATUS_CLIENT_ID", "")
     client_secret = os.environ.get("TOKEN_STATUS_CLIENT_SECRET", "")
