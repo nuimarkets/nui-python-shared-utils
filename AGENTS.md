@@ -35,7 +35,7 @@ This is `nui-python-shared-utils`, a Python package providing production-ready u
 - **Secrets Management** (`secrets_helper.py`) - Centralized credential handling with caching
 - **Slack Integration** (`slack_client.py`, `slack_formatter.py`) - Rich messaging, threading, and file uploads
 - **Elasticsearch** (`es_client.py`, `es_query_builder.py`) - Query builders and health monitoring
-- **Database** (`db_client.py`) - Connection pooling with retry logic
+- **Database** (`db_client.py`) - Connection pooling with standardized error handling
 - **Metrics** (`cloudwatch_metrics.py`) - Batched CloudWatch publishing with decorators
 - **JWT Authentication** (`jwt_auth.py`) - RS256 token validation for API Gateway Lambdas (uses `rsa` package)
 - **LLM Helper** (`llm.py`) - Generic Anthropic (Claude) client plumbing: API-key/Bedrock auth, forced tool-use call, text call (uses `anthropic`)

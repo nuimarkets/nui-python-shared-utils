@@ -96,7 +96,7 @@ client = DatabaseClient(
     secret_name: str = None,          # Override secret name
     use_pool: bool = True,            # Enable connection pooling
     pool_size: int = 5,               # Maximum pooled connections
-    pool_recycle: int = 3600          # Recycle connections after seconds
+    pool_recycle: int = 3600          # Maximum connection age from creation, in seconds
 )
 
 # Methods
@@ -112,7 +112,7 @@ client.get_connection_info() -> Dict
 ```python
 {
     "connection": pymysql.Connection,
-    "timestamp": float                # time.time() when added to pool
+    "created_at": float               # time.monotonic() when the connection is created
 }
 ```
 
@@ -512,6 +512,9 @@ stats = get_pool_stats()
 
 **Pool Stats Response:**
 
+Each pool key is an opaque process-local identifier for the snapshotted connection
+settings and authenticated credentials. It contains no username or password.
+
 ```python
 {
     "total_pools": int,
@@ -519,7 +522,7 @@ stats = get_pool_stats()
         "pool_key": {
             "active_connections": int,
             "healthy_connections": int,
-            "aged_connections": int     # Connections older than 1 hour
+            "aged_connections": int     # Connections created more than 1 hour ago
         }
     }
 }

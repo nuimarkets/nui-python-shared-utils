@@ -207,6 +207,7 @@ def lambda_handler(event, context):
                         "INSERT INTO processed_records (data) VALUES (%s)",
                         (record,)
                     )
+                conn.commit()
             
             processed += 1
         

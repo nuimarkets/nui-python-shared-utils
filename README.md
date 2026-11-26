@@ -32,7 +32,7 @@ Production-ready shared Python utilities for AWS Lambda functions, CLI tools, an
 - **AWS Secrets Manager Integration** - Secure credential management with caching
 - **Slack Messaging** - Rich formatting, threading, file uploads, and channel management
 - **Elasticsearch Operations** - Query builders, index management, and health monitoring
-- **Database Connections** - Connection pooling, automatic retries, and transaction management
+- **Database Connections** - Connection pooling, explicit commits, and transaction cleanup
 - **CloudWatch Metrics** - Batched publishing with custom dimensions
 - **JWT Authentication** - RS256 token validation for API Gateway Lambdas (lightweight, no PyJWT needed)
 - **Anthropic (Claude) Helper** - Generic client plumbing for LLM calls: API-key or Bedrock IAM auth, forced tool-use, and text calls (prompts and schemas stay in your code)
@@ -104,7 +104,7 @@ After installing the package:
 3. **Integration** → Choose your integration and follow the detailed guide:
    - [Slack Integration](docs/guides/slack-integration.md) - Messaging, formatting, file uploads
    - [Elasticsearch Operations](docs/getting-started/quickstart.md#elasticsearch-operations) - Query builders and search
-   - [Database Connections](docs/getting-started/quickstart.md#database-connections) - Connection pooling and queries
+   - [Database Connections](docs/getting-started/quickstart.md#2-database-operations) - Connection pooling and queries
    - [CloudWatch Metrics](docs/getting-started/quickstart.md#cloudwatch-metrics) - Performance tracking
 4. **Testing** → Learn testing strategies ([guide](docs/development/testing.md))
 
@@ -196,12 +196,17 @@ from nui_shared_utils import DatabaseClient
 
 db = DatabaseClient()
 
-# Execute queries with automatic retry and connection pooling
-async with db.get_connection() as conn:
-    results = await conn.execute("SELECT * FROM orders WHERE status = %s", ["confirmed"])
+# Run a SELECT with connection pooling
+with db.get_connection() as conn:
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT * FROM orders WHERE status = %s", ("confirmed",))
+        results = cursor.fetchall()
 ```
 
-**[→ See full database guide](docs/getting-started/quickstart.md#database-connections)**
+Commit writes explicitly inside a borrowed connection. Exit rolls back any unfinished
+transaction; `db.execute()` and `db.bulk_insert()` commit their successful writes.
+
+**[→ See full database guide](docs/getting-started/quickstart.md#2-database-operations)**
 
 ### Snowflake (SQL API)
 
