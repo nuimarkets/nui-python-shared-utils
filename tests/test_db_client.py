@@ -8,6 +8,7 @@ import pytest
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("clear_database_env")]
 from unittest.mock import patch, Mock, MagicMock
 import time
+from types import SimpleNamespace
 import pymysql
 from nui_shared_utils.db_client import (
     DatabaseClient,
@@ -584,7 +585,7 @@ class TestPoolSafety:
             "database": "pool-db",
         }
         monkeypatch.setattr(module, "_connection_pool", {})
-        monkeypatch.setattr(module.time, "monotonic", lambda: self.clock)
+        monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: self.clock))
         monkeypatch.setattr(module.pymysql, "connect", self.store.connect)
 
     @pytest.mark.parametrize("borrower_fails", [False, True], ids=["normal-return", "exceptional-return"])

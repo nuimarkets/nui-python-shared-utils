@@ -213,6 +213,7 @@ or thread safety.
 ### 6. Complete Lambda Function Example
 
 ```python
+import json
 import os
 from datetime import datetime, timezone
 import nui_shared_utils as nui
@@ -244,7 +245,7 @@ def process_records(event, context):
             with conn.cursor() as cursor:
                 cursor.execute(
                     "INSERT INTO processed_records (data) VALUES (%s)",
-                    (record,)
+                    (json.dumps(record),)
                 )
             conn.commit()
 

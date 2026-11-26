@@ -16,6 +16,15 @@ that contained them.
   their existing shapes, including MySQL's empty tuple and PostgreSQL's empty list.
   See [database error handling](docs/getting-started/quickstart.md#2-database-operations)
   for a migration example.
+- Pooled `DatabaseClient.get_connection()` borrowers must commit their writes before the
+  context exits. The pool rolls back unfinished transactions on return, so writes that
+  previously reached the database through a later borrower's commit are now discarded.
+  `execute()` and `bulk_insert()` still commit their successful writes.
+- `get_pool_stats()` pool keys are opaque per-process identifiers instead of
+  `host:port_database` strings; read connection details from
+  `DatabaseClient.get_connection_info()`. Explicit MySQL credentials must give text
+  fields as `str`, `bytes`, `bytearray` or `None` and `port` as an integer or `None`;
+  other types raise `TypeError` at construction.
 
 ### Added
 
