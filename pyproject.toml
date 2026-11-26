@@ -60,7 +60,7 @@ snowflake = [
 ]
 # Anthropic (Claude) helper. anthropic[bedrock] covers both auth modes (API key
 # + Bedrock IAM). Kept out of `all` (same as snowflake): the SDK is specialized
-# and opt-in. Keep in sync with setup.py.
+# and opt-in.
 llm = ["anthropic[bedrock]>=0.45.0,<1.0.0"]
 all = [
     "elasticsearch>=7.17.0,<10.0.0",
