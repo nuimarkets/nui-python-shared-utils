@@ -10,6 +10,11 @@ that contained them.
 
 ### Fixed
 
+- Secret retrieval uses a default 300-second cache TTL, with keyword-only
+  `ttl_seconds` and `force_refresh` controls. Each caller applies its own freshness
+  bound; expired or forced refresh failures surface instead of returning stale
+  values. Existing clients and previously fetched keys retain their credentials.
+
 - `SlackClient` logs a warning, once per client, when it renders a Lambda header with no
   AWS account context, naming `set_handler_context(context)` and `powertools_handler` as
   the fixes. The header itself is unchanged.

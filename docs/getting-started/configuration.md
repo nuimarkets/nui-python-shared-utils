@@ -236,6 +236,43 @@ engine's default: `3306`/`app` for MySQL, `5432`/`postgres` for `PostgreSQLClien
 
 The key must be in PKCS#8 PEM format (`BEGIN PUBLIC KEY`). The field name is configurable via the `key_field` parameter on `get_jwt_public_key()`.
 
+### Secret Cache Freshness
+
+`get_secret(secret_name, *, ttl_seconds=300, force_refresh=False)` caches each
+successful retrieval for up to 300 seconds by default, measured with a monotonic
+clock. Each caller compares the entry's actual retrieval age with its own TTL;
+a caller using a longer TTL does not weaken a later caller's shorter bound.
+At exact expiry, the next retrieval fetches the secret from AWS.
+
+```python
+# Bypass the cached read and replace the shared entry on successful retrieval.
+secret = nui.get_secret("my-service/api-keys", force_refresh=True)
+
+# Use a shorter freshness bound, or zero to fetch on every call.
+secret = nui.get_secret("my-service/api-keys", ttl_seconds=60)
+secret = nui.get_secret("my-service/api-keys", ttl_seconds=0)
+```
+
+TTL values must be finite, nonnegative numbers, excluding booleans.
+`force_refresh` must be a boolean. Invalid options raise `ValueError` before AWS
+work. Expired entries and explicit refreshes surface retrieval errors instead of
+returning stale values. A successful retrieval replaces both value and retrieval
+time, including after a zero-TTL call. `clear_cache()` removes all cached values
+and their freshness state.
+
+The cache is process-local and keyed only by the supplied secret name. It does
+not partition by AWS account, credentials or region. Clear it when changing AWS
+context in a running process; distinct full secret ARNs can avoid name aliases,
+while the AWS client still needs the correct account and region. Concurrent
+calls can fetch independently; there is no single-flight guarantee.
+
+TTL bounds cache reuse at retrieval calls, not rotation propagation or immediate
+revocation. Existing `BaseClient` instances retain credentials resolved at
+construction, and previously fetched RSA key objects retain their value.
+Recreate clients or retrieve keys again to adopt refreshed credentials. Explicit
+credentials and credential environment variables keep their existing precedence
+and bypass Secrets Manager.
+
 ### Creating Secrets
 
 #### Using AWS CLI
@@ -428,4 +465,4 @@ for name, test_func in integrations:
 4. **Use Descriptive Secret Names**: Make secret names self-documenting
 5. **Rotate Secrets Regularly**: Implement secret rotation for production environments
 6. **Minimize Secret Scope**: Only include necessary fields in secrets
-7. **Cache Configuration**: The package caches secrets automatically for performance
+7. **Cache Configuration**: Use the default 300-second secret retrieval TTL or an explicit freshness bound; recreate clients to adopt refreshed credentials

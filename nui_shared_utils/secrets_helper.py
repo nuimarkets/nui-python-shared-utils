@@ -6,33 +6,57 @@ Shared across all AWS Lambda functions.
 import os
 import json
 import logging
+import math
+import time
 from urllib.parse import urlparse
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from .config import get_config
 
 log = logging.getLogger(__name__)
 
-# Cache for secrets to avoid repeated API calls
-_secrets_cache = {}
+# Process-local, secret-name cache: retrieval time and value are replaced together.
+_secrets_cache: Dict[str, Tuple[float, Dict]] = {}
 
 
-def get_secret(secret_name: str) -> Dict:
+def get_secret(secret_name: str, *, ttl_seconds: float = 300, force_refresh: bool = False) -> Dict:
     """
     Retrieve secret from AWS Secrets Manager.
 
     Args:
-        secret_name: Name of the secret in Secrets Manager
+        secret_name: Name of the secret in Secrets Manager.
+        ttl_seconds: Maximum cached retrieval age in seconds; zero bypasses cached reads.
+            Each call applies its own finite, nonnegative TTL to the shared entry.
+        force_refresh: Fetch from AWS even when a cached value is fresh.
 
     Returns:
         Dict containing the secret values
 
     Raises:
-        Exception if secret cannot be retrieved
+        ValueError: If a cache option is invalid, before any AWS lookup.
+        Exception: If retrieval fails, including expiry and explicit refresh.
+            A stale value is never returned as a fallback.
+
+    The cache is process-local and keyed only by secret name, not AWS account or
+    region. Clear it before changing AWS context or use context-specific ARNs.
+    Retrieved values do not update existing clients or previously fetched keys.
+    Concurrent calls can retrieve independently; no single-flight guarantee is made.
     """
-    # Check cache first
-    if secret_name in _secrets_cache:
-        return _secrets_cache[secret_name]
+    if (
+        isinstance(ttl_seconds, bool)
+        or not isinstance(ttl_seconds, (int, float))
+        or ttl_seconds < 0
+        or (isinstance(ttl_seconds, float) and not math.isfinite(ttl_seconds))
+    ):
+        raise ValueError("ttl_seconds must be a finite, nonnegative number")
+    if not isinstance(force_refresh, bool):
+        raise ValueError("force_refresh must be a boolean")
+
+    cached = _secrets_cache.get(secret_name)
+    if cached is not None and not force_refresh and ttl_seconds > 0:
+        retrieved_at, value = cached
+        if time.monotonic() - retrieved_at < ttl_seconds:
+            return value
 
     import boto3
     from botocore.exceptions import ClientError
@@ -55,8 +79,8 @@ def get_secret(secret_name: str) -> Dict:
             # Binary secret (not typically used for credentials)
             secret = json.loads(response["SecretBinary"].decode("utf-8"))
 
-        # Cache the secret
-        _secrets_cache[secret_name] = secret
+        # A completed retrieval replaces value and age as one cache entry.
+        _secrets_cache[secret_name] = (time.monotonic(), secret)
 
         log.info(f"Successfully retrieved secret: {secret_name}")
         return secret

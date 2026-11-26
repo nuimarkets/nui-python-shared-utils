@@ -144,6 +144,130 @@ class TestGetSecret:
         assert "Unexpected error retrieving secret test-secret" in str(exc_info.value)
 
 
+@pytest.mark.unit
+class TestSecretFreshness:
+    @pytest.fixture
+    def clock(self):
+        with patch("time.monotonic", return_value=100) as clock:
+            yield clock
+
+    def test_default_cache_expires_at_300_seconds(self, mock_secrets_manager, clock):
+        mock_secrets_manager.get_secret_value.return_value = {"SecretString": '{"version": 1}'}
+        assert secrets_helper.get_secret("rotating") == {"version": 1}
+        mock_secrets_manager.get_secret_value.return_value = {"SecretString": '{"version": 2}'}
+        clock.return_value = 399.999
+        assert secrets_helper.get_secret("rotating") == {"version": 1}
+        clock.return_value = 400
+        assert secrets_helper.get_secret("rotating") == {"version": 2}
+        assert mock_secrets_manager.get_secret_value.call_count == 2
+
+    def test_explicit_refresh_updates_value_and_age(self, mock_secrets_manager, clock):
+        mock_secrets_manager.get_secret_value.return_value = {"SecretString": '{"version": 1}'}
+        secrets_helper.get_secret("rotating")
+        clock.return_value = 150
+        mock_secrets_manager.get_secret_value.return_value = {"SecretString": '{"version": 2}'}
+        assert secrets_helper.get_secret("rotating", force_refresh=True) == {"version": 2}
+        clock.return_value = 449.999
+        assert secrets_helper.get_secret("rotating") == {"version": 2}
+        clock.return_value = 450
+        secrets_helper.get_secret("rotating")
+        assert mock_secrets_manager.get_secret_value.call_count == 3
+
+    def test_zero_ttl_bypasses_reads_and_refreshes_shared_entry(self, mock_secrets_manager, clock):
+        mock_secrets_manager.get_secret_value.side_effect = [
+            {"SecretString": '{"version": 1}'},
+            {"SecretString": '{"version": 2}'},
+            {"SecretString": '{"version": 3}'},
+        ]
+        assert secrets_helper.get_secret("rotating") == {"version": 1}
+        assert secrets_helper.get_secret("rotating", ttl_seconds=0) == {"version": 2}
+        assert secrets_helper.get_secret("rotating", ttl_seconds=0) == {"version": 3}
+        assert secrets_helper.get_secret("rotating") == {"version": 3}
+        assert mock_secrets_manager.get_secret_value.call_count == 3
+
+    @pytest.mark.parametrize("populate_ttl, later_ttl", [(1000, 5), (5, 1000)])
+    def test_current_callers_ttl_uses_actual_retrieval_age(self, mock_secrets_manager, clock, populate_ttl, later_ttl):
+        mock_secrets_manager.get_secret_value.return_value = {"SecretString": '{"version": 1}'}
+        secrets_helper.get_secret("rotating", ttl_seconds=populate_ttl)
+        clock.return_value = 106
+        mock_secrets_manager.get_secret_value.return_value = {"SecretString": '{"version": 2}'}
+        expected = 2 if later_ttl == 5 else 1
+        assert secrets_helper.get_secret("rotating", ttl_seconds=later_ttl) == {"version": expected}
+        clock.return_value = 111
+        assert secrets_helper.get_secret("rotating", ttl_seconds=5) == {"version": 2}
+        assert mock_secrets_manager.get_secret_value.call_count == (3 if later_ttl == 5 else 2)
+
+    @pytest.mark.parametrize("ttl", [-1, True, False, float("nan"), float("inf"), float("-inf"), "300", None])
+    def test_invalid_ttl_rejected_before_aws(self, mock_boto3_session, clock, ttl):
+        with pytest.raises(ValueError, match="ttl_seconds"):
+            secrets_helper.get_secret("rotating", ttl_seconds=ttl)
+        mock_boto3_session.client.assert_not_called()
+
+    @pytest.mark.parametrize("refresh", [None, 0, 1, "true"])
+    def test_invalid_refresh_rejected_before_aws(self, mock_boto3_session, clock, refresh):
+        with pytest.raises(ValueError, match="force_refresh"):
+            secrets_helper.get_secret("rotating", force_refresh=refresh)
+        mock_boto3_session.client.assert_not_called()
+
+    @pytest.mark.parametrize("options", [{}, {"force_refresh": True}, {"ttl_seconds": 0}])
+    def test_failed_retrieval_does_not_serve_or_retimestamp_old_value(self, mock_secrets_manager, clock, options):
+        mock_secrets_manager.get_secret_value.return_value = {"SecretString": '{"version": 1}'}
+        secrets_helper.get_secret("rotating")
+        clock.return_value = 400
+        mock_secrets_manager.get_secret_value.side_effect = ClientError(
+            {"Error": {"Code": "InternalServiceErrorException"}}, "GetSecretValue"
+        )
+        for _ in range(2):
+            with pytest.raises(Exception, match="Internal service error"):
+                secrets_helper.get_secret("rotating", **options)
+        assert mock_secrets_manager.get_secret_value.call_count == 3
+        mock_secrets_manager.get_secret_value.side_effect = None
+        mock_secrets_manager.get_secret_value.return_value = {"SecretString": '{"version": 2}'}
+        assert secrets_helper.get_secret("rotating") == {"version": 2}
+
+    def test_failed_explicit_refresh_surfaces_even_before_expiry(self, mock_secrets_manager, clock):
+        secrets_helper.get_secret("rotating")
+        mock_secrets_manager.get_secret_value.side_effect = ValueError("retrieval failed")
+        clock.return_value = 101
+        with pytest.raises(Exception, match="retrieval failed"):
+            secrets_helper.get_secret("rotating", force_refresh=True)
+
+    def test_binary_secret_refreshes_at_custom_ttl(self, mock_secrets_manager, clock):
+        mock_secrets_manager.get_secret_value.return_value = {"SecretBinary": b'{"version": 1}'}
+        assert secrets_helper.get_secret("binary", ttl_seconds=2.5) == {"version": 1}
+        clock.return_value = 102.5
+        mock_secrets_manager.get_secret_value.return_value = {"SecretBinary": b'{"version": 2}'}
+        assert secrets_helper.get_secret("binary", ttl_seconds=2.5) == {"version": 2}
+
+    def test_clear_cache_removes_freshness_and_value(self, mock_secrets_manager, clock):
+        secrets_helper.get_secret("rotating")
+        secrets_helper.clear_cache()
+        mock_secrets_manager.get_secret_value.return_value = {"SecretString": '{"version": 2}'}
+        assert secrets_helper.get_secret("rotating") == {"version": 2}
+        assert mock_secrets_manager.get_secret_value.call_count == 2
+
+    def test_retrieval_completion_starts_freshness_age(self, mock_secrets_manager, clock):
+        def retrieve(**kwargs):
+            clock.return_value = 150
+            return {"SecretString": '{"version": 1}'}
+
+        mock_secrets_manager.get_secret_value.side_effect = retrieve
+        secrets_helper.get_secret("rotating")
+        clock.return_value = 449.999
+        secrets_helper.get_secret("rotating")
+        assert mock_secrets_manager.get_secret_value.call_count == 1
+        clock.return_value = 450
+        secrets_helper.get_secret("rotating")
+        assert mock_secrets_manager.get_secret_value.call_count == 2
+
+    @pytest.mark.parametrize("options", [{"ttl_seconds": True}, {"ttl_seconds": -1}, {"force_refresh": 1}])
+    def test_invalid_options_rejected_even_on_cache_hit(self, mock_secrets_manager, clock, options):
+        secrets_helper.get_secret("rotating")
+        with pytest.raises(ValueError):
+            secrets_helper.get_secret("rotating", **options)
+        assert mock_secrets_manager.get_secret_value.call_count == 1
+
+
 class TestGetDatabaseCredentials:
     """Tests for get_database_credentials function."""
 
