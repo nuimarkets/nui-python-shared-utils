@@ -10,6 +10,11 @@ that contained them.
 
 ### Fixed
 
+- JWT validation rejects malformed compact encodings, non-object headers and payloads,
+  and present `exp`/`nbf` values that are not finite numbers. These tokens follow the
+  existing authentication error and 401 paths; absent optional time claims and the
+  30-second clock-skew tolerance remain supported.
+
 - `SlackClient` logs a warning, once per client, when it renders a Lambda header with no
   AWS account context, naming `set_handler_context(context)` and `powertools_handler` as
   the fixes. The header itself is unchanged.
