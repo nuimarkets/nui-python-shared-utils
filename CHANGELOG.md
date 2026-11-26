@@ -25,6 +25,13 @@ that contained them.
 - Keyword-only `connect_timeout` on `PostgreSQLClient`, with the existing 5-second
   default. PostgreSQL has no socket `read_timeout` option on this client.
 
+### Changed
+
+- Secret retrieval uses a default 300-second cache TTL, with keyword-only
+  `ttl_seconds` and `force_refresh` controls. Each caller applies its own freshness
+  bound; expired or forced refresh failures surface instead of returning stale
+  values. Existing clients and previously fetched keys retain their credentials.
+
 ### Fixed
 
 - JWT validation rejects malformed compact encodings, non-object headers and payloads,
