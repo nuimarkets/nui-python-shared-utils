@@ -1613,6 +1613,20 @@ class TestHttpExchange:
         assert (result.status, result.reason) == (TokenStatus.UNAVAILABLE, "oversized")
         assert elapsed < 1
 
+    def test_header_reading_stops_at_the_cap(self, servers, monkeypatch):
+        token_server = servers(respond(TOKEN_REPLY))
+
+        def endless_headers(conn, request, server):
+            conn.sendall(b"HTTP/1.1 200 OK\r\nX-Pad: " + b"a" * (64 * 1024))
+            server.hold()
+
+        status_server = servers(endless_headers)
+
+        result, elapsed = run_real(monkeypatch, status_server.url("/status"), token_server.url("/token"))
+
+        assert (result.status, result.reason) == (TokenStatus.UNAVAILABLE, "connection")
+        assert elapsed < 1
+
     @pytest.mark.parametrize(
         "raw",
         [
@@ -1761,6 +1775,58 @@ class TestDeadline:
                 filler.close()
 
         self.assert_ends_at_deadline(elapsed, result, "connection")
+        # The 1 s cap on the attempt ends it, not the 2 s deadline; the lower bound shows the connect blocked.
+        assert ts.CONNECT_TIMEOUT_SECONDS - 0.1 <= elapsed < ts.CONNECT_TIMEOUT_SECONDS + SLACK
+
+    def test_an_address_that_never_connects_gives_way_to_the_next_after_1_second(self, servers, monkeypatch):
+        never = servers(accept=False, backlog=0)
+        answering = servers(respond(json_reply({"active": True})))
+        fillers = []
+        for _ in range(4):
+            filler = socket.socket()
+            filler.setblocking(False)
+            filler.connect_ex(("127.0.0.1", never.port))  # in progress; fills the accept queue
+            fillers.append(filler)
+        real_getaddrinfo = socket.getaddrinfo
+
+        def two_addresses(host, port, *args, **kwargs):
+            family, socktype, proto, canonname, _ = real_getaddrinfo("127.0.0.1", answering.port, *args, **kwargs)[0]
+            return [
+                (family, socktype, proto, canonname, ("127.0.0.1", never.port)),
+                (family, socktype, proto, canonname, ("127.0.0.1", answering.port)),
+            ]
+
+        monkeypatch.setattr(socket, "getaddrinfo", two_addresses)
+        started = time.monotonic()
+        try:
+            response = ts.send(
+                "POST", "http://issuer.test/status", {}, b"", started + ts.DEADLINE_SECONDS, ts.MAX_BODY_BYTES
+            )
+        finally:
+            for filler in fillers:
+                filler.close()
+        elapsed = time.monotonic() - started
+
+        assert response.status == 200
+        assert ts.CONNECT_TIMEOUT_SECONDS - 0.1 <= elapsed < ts.CONNECT_TIMEOUT_SECONDS + SLACK
+
+    def test_the_tls_handshake_gets_only_the_time_left(self, servers, monkeypatch):
+        # The connection attempt leaves its own 1 s timeout on the socket; the handshake must not inherit it.
+        silent_server = servers(silent)
+        real_connect = ts._connect
+
+        def slow_connect(host, port, deadline):
+            sock = real_connect(host, port, deadline)
+            time.sleep(0.8)
+            return sock
+
+        monkeypatch.setattr(ts, "_connect", slow_connect)
+        started = time.monotonic()
+
+        with pytest.raises(TransportError):
+            ts.send("POST", silent_server.url("/", "https"), {}, b"", started + 1.0, ts.MAX_BODY_BYTES)
+
+        assert time.monotonic() - started < 1.0 + 0.2
 
     def test_status_server_stalls_after_the_headers(self, servers, monkeypatch):
         token_server = servers(respond(TOKEN_REPLY))
