@@ -5,6 +5,7 @@ Refactored Database client using BaseClient for DRY code patterns.
 import time
 import logging
 import hmac
+import json
 import secrets
 from typing import Dict, List, Optional, Any
 from contextlib import contextmanager
@@ -73,6 +74,31 @@ def get_pool_stats() -> Dict[str, Any]:
     return stats
 
 
+def _snapshot_mysql_credentials(credentials: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy driver inputs to immutable values without caller-defined conversions."""
+    snapshot = dict(credentials)
+    snapshot.setdefault("port", 3306)
+    snapshot.setdefault("database", "app")
+    for field in ("host", "username", "password", "database"):
+        if field not in snapshot:
+            continue
+        value = snapshot[field]
+        if isinstance(value, str):
+            snapshot[field] = str.__str__(value)
+        elif isinstance(value, bytes):
+            snapshot[field] = bytes.__bytes__(value)
+        elif isinstance(value, bytearray):
+            snapshot[field] = memoryview(value).tobytes()
+        elif value is not None:
+            raise TypeError(f"MySQL credential {field} must be a string, bytes, bytearray or None")
+    port = snapshot["port"]
+    if isinstance(port, int):
+        snapshot["port"] = int.__int__(port)
+    elif port is not None:
+        raise TypeError("MySQL credential port must be an integer or None")
+    return snapshot
+
+
 class DatabaseClient(BaseClient, ServiceHealthMixin):
     """
     Refactored Database client with connection pooling and standardized patterns.
@@ -107,9 +133,7 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
 
         # Snapshot once so caller mutation cannot separate pool identity from settings.
         self.credentials = dict(self.credentials)
-        self._connection_credentials = dict(self.credentials)
-        self._connection_credentials.setdefault("port", 3306)
-        self._connection_credentials.setdefault("database", "app")
+        self._connection_credentials = _snapshot_mysql_credentials(self.credentials)
         identity = (
             self._connection_credentials["host"],
             self._connection_credentials["port"],
@@ -119,7 +143,13 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
             10,  # connect_timeout
             30,  # read_timeout
         )
-        self._pool_key = "mysql:" + hmac.digest(_pool_identity_secret, repr(identity).encode("utf-8"), "sha256").hex()
+        # Type tags and JSON field boundaries keep byte/string values unambiguous.
+        encoded_identity = json.dumps(
+            [(type(value).__name__, value.hex() if type(value) is bytes else value) for value in identity],
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("ascii")
+        self._pool_key = "mysql:" + hmac.digest(_pool_identity_secret, encoded_identity, "sha256").hex()
 
     def _get_default_config_prefix(self) -> str:
         """Return configuration prefix for database."""

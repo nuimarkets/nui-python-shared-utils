@@ -320,8 +320,15 @@ api_keys = nui.get_secret("my-service/api-keys")
 authenticated user and password. Pool identifiers in `get_pool_stats()` and debug logs
 are opaque process-local values; they contain no usernames or passwords. The client
 snapshots its connection credentials at construction, so later edits to the original
-credentials dictionary do not change its connection settings. Construct a new client to
-adopt changed credentials.
+credentials dictionary do not change its connection settings. String and bytes subclasses
+use their underlying values; mutable bytearray values are copied to immutable bytes.
+Connection text fields accept strings, bytes, bytearrays or `None`; the port accepts an
+integer or `None`. Other value types raise `TypeError` during construction.
+
+Construct a new client to adopt changed credentials. For a Secrets Manager secret that
+keeps its name, first call `nui_shared_utils.secrets_helper.clear_cache()` or restart the
+process so the new client reads the changed value. Fresh explicit credentials and
+`DB_*` environment values do not require this cache step.
 
 Every pooled return rolls back any unfinished transaction, including a SELECT-only
 transaction, before checking connection health. Cleanup failure closes the connection

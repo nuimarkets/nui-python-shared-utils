@@ -702,6 +702,107 @@ class TestPoolSafety:
         assert one.settings["password"] == original["password"]
         assert one.settings["database"] == original["database"]
 
+    @pytest.mark.parametrize("field", ["host", "username", "password", "database"])
+    @pytest.mark.parametrize("value_type", [str, bytes], ids=["str-subclass", "bytes-subclass"])
+    def test_masked_credentials_use_immutable_underlying_values(self, field, value_type):
+        class MaskedString(str):
+            def __repr__(self):
+                return "'<masked>'"
+
+            def __str__(self):
+                return "<masked>"
+
+            def encode(self, *args, **kwargs):
+                return b"<masked>"
+
+        class MaskedBytes(bytes):
+            def __repr__(self):
+                return "b'<masked>'"
+
+            def __bytes__(self):
+                return b"<masked>"
+
+        masked_type = MaskedString if value_type is str else MaskedBytes
+        original = "first-value" if value_type is str else b"first-value"
+        other = "second-value" if value_type is str else b"second-value"
+        first = DatabaseClient(credentials=dict(self.credentials, **{field: masked_type(original)}))
+        second = DatabaseClient(credentials=dict(self.credentials, **{field: masked_type(other)}))
+        equivalent = DatabaseClient(credentials=dict(self.credentials, **{field: original}))
+        with first.get_connection() as one:
+            pass
+        with second.get_connection() as two:
+            pass
+        with equivalent.get_connection() as same:
+            pass
+
+        assert one is not two
+        assert same is one
+        driver_field = "user" if field == "username" else field
+        assert type(one.settings[driver_field]) is value_type
+        assert one.settings[driver_field] == original
+        assert two.settings[driver_field] == other
+
+    def test_masked_port_uses_immutable_underlying_integer(self):
+        class MaskedPort(int):
+            def __repr__(self):
+                return "3306"
+
+            def __int__(self):
+                return 1
+
+        first = DatabaseClient(credentials=dict(self.credentials, port=MaskedPort(3306)))
+        second = DatabaseClient(credentials=dict(self.credentials, port=MaskedPort(3307)))
+        equivalent = DatabaseClient(credentials=dict(self.credentials, port=3306))
+        with first.get_connection() as one:
+            pass
+        with second.get_connection() as two:
+            pass
+        with equivalent.get_connection() as same:
+            pass
+
+        assert one is not two
+        assert same is one
+        assert type(one.settings["port"]) is int
+        assert one.settings["port"] == 3306
+        assert two.settings["port"] == 3307
+
+    @pytest.mark.parametrize(
+        ("first_values", "second_values"),
+        [
+            ({"username": "user|part", "password": "rest"}, {"username": "user", "password": "part|rest"}),
+            ({"password": bytes([1])}, {"password": "01"}),
+        ],
+        ids=["field-boundaries", "binary-versus-text"],
+    )
+    def test_serialized_identity_keeps_type_and_field_boundaries(self, first_values, second_values):
+        first = DatabaseClient(credentials=dict(self.credentials, **first_values))
+        second = DatabaseClient(credentials=dict(self.credentials, **second_values))
+        with first.get_connection() as one:
+            pass
+        with second.get_connection() as two:
+            pass
+
+        assert one is not two
+
+    def test_mutable_password_is_frozen_before_identity_and_first_borrow(self):
+        password = bytearray(b"original-password")
+        first = DatabaseClient(credentials=dict(self.credentials, password=password))
+        equivalent = DatabaseClient(credentials=dict(self.credentials, password=b"original-password"))
+        password[:] = b"rotated-password"
+        rotated = DatabaseClient(credentials=dict(self.credentials, password=password))
+        with first.get_connection() as one:
+            pass
+        with equivalent.get_connection() as same:
+            pass
+        with rotated.get_connection() as two:
+            pass
+
+        assert one.settings["password"] == b"original-password"
+        assert type(one.settings["password"]) is bytes
+        assert same is one
+        assert two is not one
+        assert two.settings["password"] == b"rotated-password"
+
     def test_pool_diagnostics_do_not_expose_credentials(self, caplog):
         import logging
 
