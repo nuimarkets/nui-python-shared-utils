@@ -8,12 +8,14 @@ that contained them.
 
 ## [Unreleased]
 
-### Fixed
+### Changed
 
 - Secret retrieval uses a default 300-second cache TTL, with keyword-only
   `ttl_seconds` and `force_refresh` controls. Each caller applies its own freshness
   bound; expired or forced refresh failures surface instead of returning stale
   values. Existing clients and previously fetched keys retain their credentials.
+
+### Fixed
 
 - The installed `slack-channel-setup` executable accepts documented setup options
   directly, including `--config` and `--validate-only`. Python callers retain the
