@@ -303,14 +303,22 @@ raises); `call_text` returns `{text, input_tokens, output_tokens}`.
 ```python
 from nui_shared_utils import with_retry, handle_lambda_error
 
-@handle_lambda_error
 @with_retry(max_attempts=3)
-def lambda_handler(event, context):
-    # Your Lambda logic with automatic error handling and retries
+def process_event(event):
+    # Your Lambda logic, retried before the handler formats an error response
     return {"statusCode": 200}
+
+def lambda_handler(event, context):
+    try:
+        return process_event(event)
+    except Exception as error:
+        return handle_lambda_error(error, {
+            "function_name": context.function_name,
+            "aws_request_id": context.aws_request_id,
+        })
 ```
 
-**[→ See full error handling guide](docs/getting-started/quickstart.md#error-handling)**
+**[→ See full error handling guide](docs/getting-started/quickstart.md#1-simple-lambda-handler-with-error-handling)**
 
 ## Configuration
 

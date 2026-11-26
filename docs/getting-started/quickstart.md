@@ -37,10 +37,9 @@ nui.configure(
     aws_region="us-east-1"
 )
 
-@nui.handle_lambda_error
 @nui.with_retry(max_attempts=3)
-def lambda_handler(event, context):
-    """Lambda function with automatic error handling and retries."""
+def process_event(event):
+    """Process an event, retrying failures before formatting the response."""
     slack = nui.SlackClient()
     
     # Process your data
@@ -53,7 +52,20 @@ def lambda_handler(event, context):
     )
     
     return {"statusCode": 200, "processed": processed_count}
+
+def lambda_handler(event, context):
+    try:
+        return process_event(event)
+    except Exception as error:
+        return nui.handle_lambda_error(error, {
+            "function_name": context.function_name,
+            "aws_request_id": context.aws_request_id,
+        })
 ```
+
+`handle_lambda_error(error, context_dict)` returns the standard error response.
+Pass a dictionary with the Lambda context attributes shown above. Keep the retry
+operation inside the handler's `try` so exhausted retries reach the error helper.
 
 ### 2. Database Operations
 
@@ -178,16 +190,15 @@ nui.configure(
 )
 
 @nui.track_lambda_performance()
-@nui.handle_lambda_error
 def lambda_handler(event, context):
     """Complete example with all integrations."""
     
-    # Initialize clients
-    db = nui.DatabaseClient()
-    es = nui.ElasticsearchClient()
-    slack = nui.SlackClient()
-    
     try:
+        # Initialize clients
+        db = nui.DatabaseClient()
+        es = nui.ElasticsearchClient()
+        slack = nui.SlackClient()
+
         # Process records
         records = event.get('records', [])
         processed = 0
@@ -207,7 +218,7 @@ def lambda_handler(event, context):
         es.index_document(
             index="application-logs",
             body={
-                "timestamp": nui.get_nz_time(),
+                "timestamp": nui.nz_time().isoformat(),
                 "level": "INFO",
                 "message": f"Processed {processed} records",
                 "function_name": context.function_name
@@ -229,10 +240,11 @@ def lambda_handler(event, context):
             "body": f"Processed {processed} records"
         }
         
-    except Exception as e:
-        # Error handling is automatic with decorators
-        # Additional custom error handling can go here
-        raise
+    except Exception as error:
+        return nui.handle_lambda_error(error, {
+            "function_name": context.function_name,
+            "aws_request_id": context.aws_request_id,
+        })
 ```
 
 ### 7. JWT Authentication for API Gateway
@@ -359,7 +371,8 @@ nui.configure(
 ### Error Notifications
 
 ```python
-@nui.handle_lambda_error
+import nui_shared_utils as nui
+
 def lambda_handler(event, context):
     try:
         # Your logic here
@@ -371,7 +384,10 @@ def lambda_handler(event, context):
             channel="#alerts",
             text=f"❌ Lambda error in {context.function_name}: {str(e)}"
         )
-        raise  # Re-raise for proper Lambda error handling
+        return nui.handle_lambda_error(e, {
+            "function_name": context.function_name,
+            "aws_request_id": context.aws_request_id,
+        })
 ```
 
 ### Retry with Backoff
