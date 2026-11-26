@@ -56,8 +56,10 @@ def _python_blocks(path):
             block = None
         elif block[3]:
             block[4].append(_strip_fence_indent(line, block[1]))
-    if block is not None:
-        raise AssertionError(f"{path.relative_to(REPO_ROOT)}:{block[0]}: fence is never closed")
+    # CommonMark closes an open block at the end of the document. An unclosed python block
+    # is still refused: it is almost always a missing closer swallowing the prose after it.
+    if block is not None and block[3]:
+        raise AssertionError(f"{path.relative_to(REPO_ROOT)}:{block[0]}: python fence is never closed")
 
 
 def _cases():
@@ -107,8 +109,15 @@ def test_fence_indentation_is_stripped_and_nothing_more(tmp_path, markdown, pars
         pytest.param("~~~python\nx = 1\n~~~\n", ["x = 1"], id="tilde-fence"),
         pytest.param("````python\nx = 1\n````\n", ["x = 1"], id="long-backtick-fence"),
         pytest.param("```python\nx = 1\n````\n", ["x = 1"], id="longer-closing-fence"),
-        pytest.param("````text\n```python\nbad(:\n```\n````\n", [], id="python-fence-inside-text-fence"),
-        pytest.param("```markdown\n```python\nbad(:\n```\n", [], id="python-info-line-is-content"),
+        pytest.param(
+            "````text\n```python\nbad(:\n```\n````\n```python\ny = 2\n```\n",
+            ["y = 2"],
+            id="python-fence-inside-text-fence",
+        ),
+        pytest.param(
+            "```markdown\n```python\nbad(:\n```\n```python\ny = 2\n```\n", ["y = 2"], id="python-info-line-is-content"
+        ),
+        pytest.param("```python\nx = 1\n```\n```text\nunclosed\n", ["x = 1"], id="unclosed-text-fence-at-eof"),
     ],
 )
 def test_fences_follow_commonmark(tmp_path, markdown, expected):
