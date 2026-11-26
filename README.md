@@ -416,10 +416,22 @@ See our [development guide](docs/development/testing.md) for testing patterns an
 The package includes `slack-channel-setup` - a CLI tool for automating Slack workspace channel creation from YAML configuration files. This generic tool works with any Slack workspace and can be used independently of Lambda functions.
 
 ```bash
-# Install and use
+# Install and inspect the command
 pip install nui-python-shared-utils[slack]
+slack-channel-setup --help
+slack-channel-setup --version
+
+# Validate locally without a Slack token or API calls
+slack-channel-setup --config channels.yaml --validate-only
+
+# Create/configure channels using SLACK_BOT_TOKEN
 slack-channel-setup --config channels.yaml
 ```
+
+The installed command accepts setup options directly. `--version` reports the
+installed package version. Python callers can also use the `cli` group with
+`slack setup-channels`, or call the `setup_channels` Click command directly.
+See the [CLI tools guide](docs/guides/cli-tools.md) for configuration and options.
 
 ## Documentation & Support
 

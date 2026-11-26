@@ -76,23 +76,35 @@ dead-letter queue.
 ### 2. Database Operations
 
 ```python
+import logging
+import pymysql
 import nui_shared_utils as nui
 
-# Configure database
 nui.configure(db_credentials_secret="prod/database")
 
 def get_user_data(user_id: int):
-    """Get user data with connection pooling."""
-    db = nui.DatabaseClient()
-    
-    with db.get_connection() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT * FROM users WHERE id = %s",
-                (user_id,)
-            )
-            return cursor.fetchone()
+    """Return matching rows; let the caller handle database failures."""
+    db = nui.DatabaseClient(connect_timeout=2, read_timeout=4)
+    try:
+        rows = db.query("SELECT * FROM users WHERE id = %s", (user_id,))
+    except pymysql.MySQLError:
+        logging.exception("User lookup failed")
+        raise  # Allow the invocation or caller's retry policy to handle the failure.
+    if not rows:
+        return None  # A successful SELECT found no matching user.
+    return rows[0]
 ```
+
+**Migration:** both `DatabaseClient.query()` and `PostgreSQLClient.query()` raise the
+original connection, execution or fetch exception after logging it. Add explicit error
+handling where a caller previously relied on failures returning `[]`; catch
+`psycopg2.Error` for PostgreSQL driver errors. A successful MySQL query preserves the
+PyMySQL result (including `()` for no rows); PostgreSQL returns a list (`[]` for no rows).
+Use `if not rows` to test successful empty results across both clients.
+
+Timeouts limit connection attempts or socket reads, not the total query or Lambda
+invocation. See [database timeout settings](configuration.md#database-timeouts) for
+supported values and PostgreSQL's connection-only limit.
 
 ### 3. Elasticsearch Search
 

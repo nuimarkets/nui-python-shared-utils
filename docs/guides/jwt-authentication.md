@@ -39,7 +39,7 @@ One-call authentication for API Gateway Lambda handlers. Extracts the Bearer tok
 
 ### `validate_jwt(token, public_key) -> dict`
 
-Lower-level validation when you already have the public key. Verifies token structure, RS256 signature, and expiration.
+Lower-level validation when you already have the public key. Verifies compact-token encoding, JSON object structure, the RS256 signature, and optional `exp` and `nbf` time claims.
 
 - **token** — Raw JWT string (no `Bearer` prefix)
 - **public_key** — `rsa.PublicKey` instance
@@ -48,7 +48,10 @@ Lower-level validation when you already have the public key. Verifies token stru
 
 ### `get_jwt_public_key(secret_name=None, key_field="TOKEN_PUBLIC_KEY") -> rsa.PublicKey`
 
-Fetches and parses the PEM public key from Secrets Manager. Uses `secrets_helper` cache — repeated calls don't make additional API calls.
+Fetches and parses the PEM public key from Secrets Manager. Calls use the default
+300-second `secrets_helper` retrieval cache. The first call at or after expiry
+retrieves the current secret; a failed retrieval surfaces instead of serving a
+stale key.
 
 - **secret_name** — Falls back to `JWT_PUBLIC_KEY_SECRET` env var
 - **key_field** — JSON field in the secret containing the PEM string
@@ -114,7 +117,7 @@ def lambda_handler(event, context):
 ```python
 from nui_shared_utils import get_jwt_public_key, validate_jwt, JWTValidationError
 
-# Fetch key once at module level (cached by secrets_helper)
+# This retained key is not refreshed by later secrets_helper retrievals.
 public_key = get_jwt_public_key(secret_name="prod/jwt-public-key")
 
 def validate_token(token: str) -> dict:
@@ -123,6 +126,14 @@ def validate_token(token: str) -> dict:
     except JWTValidationError as e:
         raise ValueError(f"Bad token: {e}")
 ```
+
+For bounded adoption of rotated keys, call `require_auth` or
+`get_jwt_public_key` on each request. These paths retrieve through the default
+300-second cache. The example above retains its key until the application
+explicitly fetches and assigns another one. The TTL bounds cached retrievals;
+it does not promise immediate revocation or mutate a key already held by a
+caller. The cache is process-local and keyed by secret name, so clear it before
+changing AWS account or region in the same process.
 
 ### Custom Key Field Name
 
@@ -138,10 +149,19 @@ key = get_jwt_public_key(
 
 | Check | Behavior |
 |-------|----------|
-| Token structure | Must be 3 dot-separated base64url segments |
+| Token structure | Three nonempty, unpadded base64url segments using only ASCII letters, digits, `-` and `_` |
+| JSON structure | Header and payload must each decode to a JSON object |
 | Algorithm | Header `alg` must be `RS256` |
-| Signature | RSA PKCS#1 v1.5 with SHA-256 |
-| Expiration | `exp` claim checked against current time (optional — tokens without `exp` are accepted) |
+| Signature | RSA PKCS#1 v1.5 with SHA-256; payload claims are used only after signature verification |
+| Time claim types | Present `exp` and `nbf` claims must be finite numbers; null, booleans, strings, arrays and objects are rejected |
+| Expiration | Accept through `exp + 30` seconds; an absent `exp` claim is supported |
+| Not before | Accept from `nbf - 30` seconds; an absent `nbf` claim is supported |
+
+Malformed tokens raise `JWTValidationError` from `validate_jwt` and
+`AuthenticationError` from `require_auth`. `check_auth` returns its standard 401
+response for these failures. Public paths continue to bypass authentication.
+Tokens with padded or other non-base64url segments, non-object JSON, or invalid
+time-claim types must be corrected by their issuer before use.
 
 ## Dependency Details
 
