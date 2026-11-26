@@ -8,6 +8,7 @@ references stay parseable by being written as ``class``/``def`` stubs.
 import ast
 from pathlib import Path
 import re
+import textwrap
 
 import pytest
 
@@ -16,10 +17,13 @@ pytestmark = pytest.mark.unit
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OPEN_FENCE = re.compile(r"^\s*```(?:python|py)\s*$")
 CLOSE_FENCE = re.compile(r"^\s*```\s*$")
+# Local working docs kept at the repo root are untracked, so CI never sees them.
+LOCAL_DOC_PREFIXES = ("PLAN_", "HANDOVER_", "TRACKING_")
 
 
 def _markdown_files():
-    return sorted([*REPO_ROOT.glob("*.md"), *(REPO_ROOT / "docs").rglob("*.md")])
+    root_docs = [path for path in REPO_ROOT.glob("*.md") if not path.name.startswith(LOCAL_DOC_PREFIXES)]
+    return sorted([*root_docs, *(REPO_ROOT / "docs").rglob("*.md")])
 
 
 def _python_blocks(path):
@@ -30,7 +34,8 @@ def _python_blocks(path):
             if OPEN_FENCE.match(line):
                 block = (number, [])
         elif CLOSE_FENCE.match(line):
-            yield block[0], "\n".join(block[1])
+            # A fence nested in a list item is indented with its content.
+            yield block[0], textwrap.dedent("\n".join(block[1]))
             block = None
         else:
             block[1].append(line)
