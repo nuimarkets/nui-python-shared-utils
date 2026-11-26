@@ -86,9 +86,10 @@ def _snapshot_mysql_credentials(credentials: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(value, str):
             snapshot[field] = str.__str__(value)
         elif isinstance(value, bytes):
-            snapshot[field] = memoryview(value).tobytes()
+            # Base slicing bypasses both conversion and Python-level buffer hooks.
+            snapshot[field] = bytes.__getitem__(value, slice(None))
         elif isinstance(value, bytearray):
-            snapshot[field] = memoryview(value).tobytes()
+            snapshot[field] = bytes(bytearray.__getitem__(value, slice(None)))
         elif value is not None:
             raise TypeError(f"MySQL credential {field} must be a string, bytes, bytearray or None")
     port = snapshot["port"]

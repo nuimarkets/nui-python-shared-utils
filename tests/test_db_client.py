@@ -703,7 +703,9 @@ class TestPoolSafety:
         assert one.settings["database"] == original["database"]
 
     @pytest.mark.parametrize("field", ["host", "username", "password", "database"])
-    @pytest.mark.parametrize("value_type", [str, bytes], ids=["str-subclass", "bytes-subclass"])
+    @pytest.mark.parametrize(
+        "value_type", [str, bytes, bytearray], ids=["str-subclass", "bytes-subclass", "bytearray-subclass"]
+    )
     def test_masked_credentials_use_immutable_underlying_values(self, field, value_type):
         class MaskedString(str):
             def __repr__(self):
@@ -722,7 +724,26 @@ class TestPoolSafety:
             def __bytes__(self):
                 return b"<masked>"
 
-        masked_type = MaskedString if value_type is str else MaskedBytes
+            def __buffer__(self, flags):
+                return memoryview(b"<masked>")
+
+            def __getitem__(self, key):
+                return b"<masked>"
+
+        class MaskedBytearray(bytearray):
+            def __repr__(self):
+                return "bytearray(b'<masked>')"
+
+            def __bytes__(self):
+                return b"<masked>"
+
+            def __buffer__(self, flags):
+                return memoryview(b"<masked>")
+
+            def __getitem__(self, key):
+                return b"<masked>"
+
+        masked_type = {str: MaskedString, bytes: MaskedBytes, bytearray: MaskedBytearray}[value_type]
         original = "first-value" if value_type is str else b"first-value"
         other = "second-value" if value_type is str else b"second-value"
         first = DatabaseClient(credentials=dict(self.credentials, **{field: masked_type(original)}))
@@ -738,7 +759,7 @@ class TestPoolSafety:
         assert one is not two
         assert same is one
         driver_field = "user" if field == "username" else field
-        assert type(one.settings[driver_field]) is value_type
+        assert type(one.settings[driver_field]) is (str if value_type is str else bytes)
         assert one.settings[driver_field] == original
         assert two.settings[driver_field] == other
 
