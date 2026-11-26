@@ -135,8 +135,8 @@ def send_report(data: dict):
 ```python
 import nui_shared_utils as nui
 
-def track_business_metrics(records_processed: int, processing_time: float):
-    """Publish custom metrics to CloudWatch."""
+def track_business_metrics(records_processed: int, processing_time: float) -> bool:
+    """Publish custom metrics and return whether every batch succeeds."""
     metrics = nui.MetricsPublisher(
         namespace="MyApplication",
         dimensions={"Environment": "production"}
@@ -146,9 +146,21 @@ def track_business_metrics(records_processed: int, processing_time: float):
     metrics.put_metric("RecordsProcessed", records_processed, unit="Count")
     metrics.put_metric("ProcessingTime", processing_time, unit="Milliseconds")
     
-    # Metrics are automatically flushed when the object is destroyed
-    # Or manually flush with: metrics.flush()
+    return metrics.flush()
 ```
+
+Call `flush()` explicitly before returning from a Lambda invocation. A
+`with nui.MetricsPublisher(...) as metrics:` block also flushes on exit, but does
+not raise when `flush()` returns `False`; use an explicit call when the caller
+needs to handle that result. Object destruction does not flush metrics.
+
+`flush()` returns `True` when all buffered batches succeed, including an empty
+buffer, and `False` on a CloudWatch `ClientError`. Each successful request removes
+its batch immediately. A failed request leaves its batch and unattempted samples
+buffered in order, so a later `flush()` retries only those samples. Other exceptions
+propagate. If CloudWatch accepts a request but its response is lost, retrying that
+batch can duplicate samples; the publisher does not provide exactly-once delivery
+or thread safety.
 
 ### 6. Complete Lambda Function Example
 

@@ -10,6 +10,10 @@ that contained them.
 
 ### Fixed
 
+- `MetricsPublisher.flush()` removes each acknowledged batch before sending the next,
+  so retrying a partial failure preserves pending samples without resending successful
+  batches. A lost response can still cause duplicate samples on retry.
+
 - `SlackClient` logs a warning, once per client, when it renders a Lambda header with no
   AWS account context, naming `set_handler_context(context)` and `powertools_handler` as
   the fixes. The header itself is unchanged.

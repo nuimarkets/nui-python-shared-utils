@@ -150,8 +150,14 @@ class MetricsPublisher:
         """
         Send all buffered metrics to CloudWatch.
 
+        Successful requests remove their batches immediately. A failed request
+        leaves its batch and all unattempted metrics buffered for a later retry.
+        A request accepted by CloudWatch whose response is lost can be duplicated
+        on retry; this publisher does not provide exactly-once delivery.
+
         Returns:
-            bool: True if successful, False otherwise
+            bool: True if successful, False on a CloudWatch ClientError.
+                Other exceptions propagate with unsent metrics still buffered.
         """
         if not self.metric_buffer:
             return True
@@ -159,13 +165,15 @@ class MetricsPublisher:
         from botocore.exceptions import ClientError
 
         try:
-            # CloudWatch allows max 20 metrics per request
-            for i in range(0, len(self.metric_buffer), 20):
-                batch = self.metric_buffer[i : i + 20]
+            published_count = 0
+            while self.metric_buffer:
+                batch = self.metric_buffer[:20]
                 self.client.put_metric_data(Namespace=self.namespace, MetricData=batch)
+                # Acknowledged batches must not be retried if a later request fails.
+                del self.metric_buffer[: len(batch)]
+                published_count += len(batch)
 
-            log.info(f"Published {len(self.metric_buffer)} metrics to {self.namespace}")
-            self.metric_buffer = []
+            log.info(f"Published {published_count} metrics to {self.namespace}")
             return True
 
         except ClientError as e:
