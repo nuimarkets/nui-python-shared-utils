@@ -2,6 +2,7 @@
 Tests for slack_client module.
 """
 
+import logging
 import pytest
 
 pytestmark = pytest.mark.unit
@@ -1329,6 +1330,68 @@ class TestLambdaContextHeader:
         assert "dev-test-function" in header_text
         assert "(dev)" not in header_text  # No stage suffix
         assert "Production" in header_text
+
+
+class TestUnknownAccountWarning:
+    """A Lambda header with no account context says so in the function's log.
+
+    Without set_handler_context or a powertools_handler scope the header reads
+    "Unknown • <region>" on every post, and nothing told the Lambda's author.
+    """
+
+    LOGGER = "nui_shared_utils.slack_client"
+
+    @pytest.fixture
+    def lambda_slack(self, monkeypatch):
+        """A client that renders the Lambda header, with no AWS or Slack calls."""
+        monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", "test-function")
+        monkeypatch.setenv("AWS_REGION", "eu-west-1")
+        monkeypatch.setattr(SlackClient, "_create_service_client", lambda self: Mock())
+        monkeypatch.setattr(SlackClient, "_get_deployment_age", lambda self: "Unknown")
+        return lambda: SlackClient(credentials={"bot_token": "xoxb-test-token"})
+
+    def _warnings(self, caplog):
+        return [r for r in caplog.records if r.name == self.LOGGER and r.levelno == logging.WARNING]
+
+    def _header(self, client):
+        return client._create_lambda_header_block()[0]["elements"][0]["text"]
+
+    def test_warns_once_per_client_when_account_is_unknown(self, lambda_slack, caplog):
+        caplog.set_level(logging.WARNING, logger=self.LOGGER)
+        client = lambda_slack()
+
+        headers = [self._header(client) for _ in range(3)]
+
+        assert all("Unknown • eu-west-1" in h for h in headers), "rendering must not change"
+        warnings = self._warnings(caplog)
+        assert len(warnings) == 1
+        message = warnings[0].getMessage()
+        assert "set_handler_context(context)" in message
+        assert "powertools_handler" in message
+
+        # The contract is per client: a second misconfigured client is reported too.
+        self._header(lambda_slack())
+        assert len(self._warnings(caplog)) == 2
+
+    def test_no_warning_after_set_handler_context(self, lambda_slack, caplog):
+        caplog.set_level(logging.WARNING, logger=self.LOGGER)
+        client = lambda_slack()
+        context = Mock()
+        context.invoked_function_arn = "arn:aws:lambda:eu-west-1:123456789012:function:test-function"
+        client.set_handler_context(context)
+
+        assert "Production (123456789012)" in self._header(client)
+        assert self._warnings(caplog) == []
+
+    def test_local_header_does_not_warn(self, lambda_slack, caplog, monkeypatch):
+        caplog.set_level(logging.WARNING, logger=self.LOGGER)
+        monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME")
+        client = lambda_slack()
+
+        blocks = client._blocks_with_header(None, include_lambda_header=True, event_type=None)
+
+        assert "Local Testing" in blocks[0]["elements"][0]["text"]
+        assert self._warnings(caplog) == []
 
 
 class TestAccountNameConsistency:

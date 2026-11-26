@@ -94,6 +94,32 @@ slack.send_message(
 )
 ```
 
+### The context header
+
+`send_message` and `post_message` head each message with a context block unless
+you pass `include_lambda_header=False`. Inside Lambda it names the function, the
+AWS account and region, and the log group. The client reads the account from the
+invocation's `invoked_function_arn` and makes no STS call, so it knows the account
+only when one of these is true:
+
+- the handler calls `slack.set_handler_context(context)` with its Lambda context, or
+- the handler is wrapped in `powertools_handler`, which hands the current
+  invocation's context to every client without one of its own
+  ([Powertools Integration](powertools-integration.md#slack-account-context)).
+
+```python
+slack = SlackClient()
+
+def handler(event, context):
+    slack.set_handler_context(context)
+    slack.send_message(channel="#alerts", text="Nightly sync finished")
+```
+
+Otherwise the header shows the account as `Unknown`, and the client logs a
+warning naming both fixes the first time it renders that header. The warning is
+once per client, so a client created on every invocation logs it on every
+invocation.
+
 ### Two families of write method
 
 Every write has two forms, differing only in what they hand back:
@@ -616,6 +642,14 @@ def test_notification_logic(mock_slack):
 - Add required OAuth scopes in Slack app settings
 - Reinstall app to workspace after adding scopes
 - Common scopes: `chat:write`, `files:write`, `channels:read`
+
+#### Header Shows the Account as Unknown
+
+**Symptom:** the context header reads `Unknown • <region>`, and the function's log
+has the warning `Slack Lambda header has no AWS account context`.
+
+**Solution:** give the client the invocation's context, as
+[The context header](#the-context-header) describes.
 
 ## Resources
 

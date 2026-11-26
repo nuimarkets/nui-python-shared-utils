@@ -198,6 +198,8 @@ that invocation's ARN to resolve the account in Lambda and local headers. This i
 created before the handler and clients created inside it, with or without
 `slack_alert_channel`. Each client's own account-name mapping determines the display name.
 Calling `client.set_handler_context(context)` overrides inherited context for that client.
+A client with neither shows the account as `Unknown` and logs a warning the first time it
+renders a Lambda header.
 Inherited context is restored after nested handlers and cleared when the invocation ends,
 including failures; concurrent calls keep separate context. A new worker thread needs
 Python's `contextvars.copy_context()` to propagate the calling thread's context.
