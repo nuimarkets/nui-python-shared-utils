@@ -159,19 +159,23 @@ class TestNoThirdPartyTimezoneDependency:
     """
 
     def test_timezone_module_does_not_import_pytz(self):
-        output = _run("""
+        output = _run(
+            """
             import sys
             import nui_shared_utils.timezone  # noqa: F401
             print(f"pytz={'pytz' in sys.modules}")
-            """)
+            """
+        )
         assert "pytz=False" in output
 
     def test_slack_formatter_does_not_import_pytz(self):
-        output = _run("""
+        output = _run(
+            """
             import sys
             import nui_shared_utils.slack_formatter  # noqa: F401
             print(f"pytz={'pytz' in sys.modules}")
-            """)
+            """
+        )
         assert "pytz=False" in output
 
 

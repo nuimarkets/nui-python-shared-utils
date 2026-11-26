@@ -30,14 +30,17 @@ class TestConfig:
         assert config.slack_credentials_secret == "slack-credentials"
         assert config.aws_region == "us-east-1"
 
-    @patch.dict(os.environ, {
-        "ES_HOST": "custom-es:9200",
-        "ELASTICSEARCH_HOST": "alt-es:9200",  # Should not be used when ES_HOST is set
-        "ES_CREDENTIALS_SECRET": "custom-es-secret",
-        "DB_CREDENTIALS_SECRET": "custom-db-secret",
-        "SLACK_CREDENTIALS_SECRET": "custom-slack-secret",
-        "AWS_REGION": "eu-west-1",
-    })
+    @patch.dict(
+        os.environ,
+        {
+            "ES_HOST": "custom-es:9200",
+            "ELASTICSEARCH_HOST": "alt-es:9200",  # Should not be used when ES_HOST is set
+            "ES_CREDENTIALS_SECRET": "custom-es-secret",
+            "DB_CREDENTIALS_SECRET": "custom-db-secret",
+            "SLACK_CREDENTIALS_SECRET": "custom-slack-secret",
+            "AWS_REGION": "eu-west-1",
+        },
+    )
     def test_init_env_var_precedence(self):
         """Test that environment variables override defaults."""
         config = Config()
@@ -48,12 +51,16 @@ class TestConfig:
         assert config.slack_credentials_secret == "custom-slack-secret"
         assert config.aws_region == "eu-west-1"
 
-    @patch.dict(os.environ, {
-        "ELASTICSEARCH_HOST": "env-es:9200",
-        "ELASTICSEARCH_CREDENTIALS_SECRET": "env-es-secret",
-        "DATABASE_CREDENTIALS_SECRET": "env-db-secret",
-        "AWS_DEFAULT_REGION": "ap-southeast-2",
-    }, clear=True)
+    @patch.dict(
+        os.environ,
+        {
+            "ELASTICSEARCH_HOST": "env-es:9200",
+            "ELASTICSEARCH_CREDENTIALS_SECRET": "env-es-secret",
+            "DATABASE_CREDENTIALS_SECRET": "env-db-secret",
+            "AWS_DEFAULT_REGION": "ap-southeast-2",
+        },
+        clear=True,
+    )
     def test_init_alternative_env_vars(self):
         """Test alternative environment variable names."""
         config = Config()
@@ -86,10 +93,7 @@ class TestConfig:
     def test_init_mixed_sources(self):
         """Test initialization with mixed parameter and environment sources."""
         with patch.dict(os.environ, {"ES_HOST": "env-es:9200", "AWS_REGION": "eu-central-1"}):
-            config = Config(
-                es_credentials_secret="param-secret",
-                db_credentials_secret="param-db-secret"
-            )
+            config = Config(es_credentials_secret="param-secret", db_credentials_secret="param-db-secret")
 
             # Should use environment for es_host and aws_region
             assert config.es_host == "env-es:9200"
@@ -132,6 +136,7 @@ class TestGlobalConfig:
         """Reset global config before each test."""
         # Reset the global config
         from nui_shared_utils import config as config_module
+
         config_module._default_config = None
 
     @patch.dict(os.environ, {}, clear=True)
@@ -161,10 +166,7 @@ class TestGlobalConfig:
 
     def test_configure_convenience_function(self):
         """Test the configure convenience function."""
-        config = configure(
-            es_host="configured:9200",
-            aws_region="configured-region"
-        )
+        config = configure(es_host="configured:9200", aws_region="configured-region")
 
         assert isinstance(config, Config)
         assert config.es_host == "configured:9200"
@@ -181,6 +183,7 @@ class TestLegacyCompatibilityFunctions:
     def setup_method(self):
         """Reset global config before each test."""
         from nui_shared_utils import config as config_module
+
         config_module._default_config = None
 
     def test_get_es_host(self):
@@ -219,40 +222,50 @@ class TestLegacyCompatibilityFunctions:
 class TestConfigurationPrecedence:
     """Tests for configuration precedence edge cases."""
 
-    @patch.dict(os.environ, {
-        "ES_HOST": "primary-es:9200",
-        "ELASTICSEARCH_HOST": "secondary-es:9200",
-    })
+    @patch.dict(
+        os.environ,
+        {
+            "ES_HOST": "primary-es:9200",
+            "ELASTICSEARCH_HOST": "secondary-es:9200",
+        },
+    )
     def test_primary_env_var_wins(self):
         """Test that primary environment variable takes precedence."""
         config = Config()
 
         assert config.es_host == "primary-es:9200"
 
-    @patch.dict(os.environ, {
-        "ELASTICSEARCH_HOST": "secondary-es:9200",
-    }, clear=True)
+    @patch.dict(
+        os.environ,
+        {
+            "ELASTICSEARCH_HOST": "secondary-es:9200",
+        },
+        clear=True,
+    )
     def test_secondary_env_var_used_when_primary_missing(self):
         """Test that secondary environment variable is used when primary is missing."""
         config = Config()
 
         assert config.es_host == "secondary-es:9200"
 
-    @patch.dict(os.environ, {
-        "AWS_REGION": "primary-region",
-        "AWS_DEFAULT_REGION": "secondary-region",
-    })
+    @patch.dict(
+        os.environ,
+        {
+            "AWS_REGION": "primary-region",
+            "AWS_DEFAULT_REGION": "secondary-region",
+        },
+    )
     def test_aws_region_precedence(self):
         """Test AWS region environment variable precedence."""
         config = Config()
 
         assert config.aws_region == "primary-region"
 
-    @patch.dict(os.environ, {
-        "AWS_DEFAULT_REGION": "secondary-region",
-    })
-    def test_aws_default_region_fallback(self):
+    def test_aws_default_region_fallback(self, monkeypatch):
         """Test AWS_DEFAULT_REGION fallback."""
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+        monkeypatch.setenv("AWS_DEFAULT_REGION", "secondary-region")
         config = Config()
 
         assert config.aws_region == "secondary-region"

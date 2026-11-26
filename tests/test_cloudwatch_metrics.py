@@ -518,8 +518,9 @@ class TestHelperFunctions:
         assert dimensions["Environment"] == "prod"
         assert dimensions["Region"] == "us-west-2"
 
-    def test_create_service_dimensions_default_region(self):
+    def test_create_service_dimensions_default_region(self, monkeypatch):
         """Test creating service dimensions with AWS_DEFAULT_REGION."""
+        monkeypatch.delenv("AWS_REGION", raising=False)
         with patch.dict(os.environ, {"AWS_DEFAULT_REGION": "eu-west-1", "STAGE": "dev"}):
             dimensions = create_service_dimensions("test-service")
 

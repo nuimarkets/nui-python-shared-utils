@@ -90,9 +90,7 @@ def extract_cloudwatch_logs_from_kinesis(
             raise
 
         try:
-            decompressed = zlib.decompress(
-                base64.b64decode(raw_data), 16 + zlib.MAX_WBITS
-            ).decode("utf-8")
+            decompressed = zlib.decompress(base64.b64decode(raw_data), 16 + zlib.MAX_WBITS).decode("utf-8")
             data = json.loads(decompressed)
         except Exception as e:
             logger.exception("Failed to decode/decompress Kinesis record")
@@ -128,9 +126,7 @@ def extract_cloudwatch_logs_from_kinesis(
                 continue
             raise
 
-    logger.debug(
-        f"Processed {sum(log_counts)} log events from {len(records)} Kinesis records"
-    )
+    logger.debug(f"Processed {sum(log_counts)} log events from {len(records)} Kinesis records")
 
 
 def derive_index_name(
