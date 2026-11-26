@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import venv
@@ -106,7 +107,7 @@ def test_installed_entrypoint_help_and_version(installed_cli):
     _, executable, run, version = installed_cli
     help_result = run([str(executable), "--help"])
     assert help_result.returncode == 0, help_result.stderr
-    assert "--config" in help_result.stdout
+    assert re.search(r"^\s+--config PATH\s", help_result.stdout, re.MULTILINE), help_result.stdout
     version_result = run([str(executable), "--version"])
     assert version_result.returncode == 0, version_result.stderr
     assert f"version {version}" in version_result.stdout

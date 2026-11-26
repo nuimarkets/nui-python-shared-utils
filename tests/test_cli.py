@@ -1,5 +1,6 @@
 """Exercise channel setup through the CLI with Slack's WebClient mocked."""
 
+import re
 from unittest.mock import Mock, call, patch
 
 import pytest
@@ -164,7 +165,8 @@ def test_python_commands_expose_help_and_installed_version(grouped):
     runner = CliRunner()
     help_result = runner.invoke(command, ["--help"])
     assert help_result.exit_code == 0, help_result.output
-    assert ("slack" if grouped else "--config") in help_result.output
+    declaration = r"^\s+slack\s" if grouped else r"^\s+--config PATH\s"
+    assert re.search(declaration, help_result.output, re.MULTILINE), help_result.output
     version_result = runner.invoke(command, ["--version"])
     assert version_result.exit_code == 0, version_result.output
     assert f"version {version('nui-python-shared-utils')}" in version_result.output
