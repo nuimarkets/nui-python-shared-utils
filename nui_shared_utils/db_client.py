@@ -86,7 +86,7 @@ def _snapshot_mysql_credentials(credentials: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(value, str):
             snapshot[field] = str.__str__(value)
         elif isinstance(value, bytes):
-            snapshot[field] = bytes.__bytes__(value)
+            snapshot[field] = memoryview(value).tobytes()
         elif isinstance(value, bytearray):
             snapshot[field] = memoryview(value).tobytes()
         elif value is not None:
