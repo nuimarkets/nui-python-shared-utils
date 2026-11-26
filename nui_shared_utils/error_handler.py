@@ -309,7 +309,7 @@ def handle_lambda_error(error: Exception, context: Dict) -> Dict:
 
     Args:
         error: The exception that occurred
-        context: Lambda context or custom context dict
+        context: Dictionary with optional function_name and aws_request_id metadata
 
     Returns:
         Dict: Standardized error response

@@ -105,7 +105,7 @@ After installing the package:
    - [Slack Integration](docs/guides/slack-integration.md) - Messaging, formatting, file uploads
    - [Elasticsearch Operations](docs/getting-started/quickstart.md#elasticsearch-operations) - Query builders and search
    - [Database Connections](docs/getting-started/quickstart.md#2-database-operations) - Connection pooling and queries
-   - [CloudWatch Metrics](docs/getting-started/quickstart.md#cloudwatch-metrics) - Performance tracking
+   - [CloudWatch Metrics](docs/getting-started/quickstart.md#5-cloudwatch-metrics) - Performance tracking
 4. **Testing** → Learn testing strategies ([guide](docs/development/testing.md))
 
 **Complete documentation**: [docs/](docs/README.md)
@@ -242,15 +242,14 @@ the `[snowflake]` extra.
 ```python
 from nui_shared_utils import MetricsPublisher, track_lambda_performance
 
-metrics = MetricsPublisher(namespace="MyApplication")
-
-@track_lambda_performance(metrics)
+@track_lambda_performance(namespace="MyApplication")
 def lambda_handler(event, context):
-    metrics.put_metric("ProcessedItems", 150, "Count")
+    with MetricsPublisher(namespace="MyApplication") as metrics:
+        metrics.put_metric("ProcessedItems", 150, "Count")
     return {"statusCode": 200}
 ```
 
-**[→ See full metrics guide](docs/getting-started/quickstart.md#cloudwatch-metrics)**
+**[→ See full metrics guide](docs/getting-started/quickstart.md#5-cloudwatch-metrics)**
 
 ### JWT Authentication
 
@@ -309,14 +308,22 @@ raises); `call_text` returns `{text, input_tokens, output_tokens}`.
 ```python
 from nui_shared_utils import with_retry, handle_lambda_error
 
-@handle_lambda_error
 @with_retry(max_attempts=3)
-def lambda_handler(event, context):
-    # Your Lambda logic with automatic error handling and retries
+def process_event(event):
+    # Your Lambda logic, retried before the handler formats an error response
     return {"statusCode": 200}
+
+def lambda_handler(event, context):
+    try:
+        return process_event(event)
+    except Exception as error:
+        return handle_lambda_error(error, {
+            "function_name": context.function_name,
+            "aws_request_id": context.aws_request_id,
+        })
 ```
 
-**[→ See full error handling guide](docs/getting-started/quickstart.md#error-handling)**
+**[→ See full error handling guide](docs/getting-started/quickstart.md#1-simple-lambda-handler-with-error-handling)**
 
 ## Configuration
 

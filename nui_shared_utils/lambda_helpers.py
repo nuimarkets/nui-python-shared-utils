@@ -61,10 +61,15 @@ def get_lambda_environment_info() -> Dict[str, Union[str, bool]]:
         >>> logger.info("Starting handler", extra=env_info)
 
     Usage with CloudWatch metrics dimensions:
-        >>> metrics = MetricsPublisher(namespace="MyService")
+        >>> from nui_shared_utils import MetricsPublisher
         >>> env_info = get_lambda_environment_info()
-        >>> metrics.add_dimension("Environment", env_info["environment"])
-        >>> metrics.add_dimension("FunctionName", env_info["function_name"])
+        >>> metrics = MetricsPublisher(
+        ...     namespace="MyService",
+        ...     dimensions={
+        ...         "Environment": env_info["environment"],
+        ...         "FunctionName": env_info["function_name"],
+        ...     },
+        ... )
     """
     # Detect if running in Lambda environment
     # AWS_LAMBDA_RUNTIME_API is set by the Lambda runtime, not available locally

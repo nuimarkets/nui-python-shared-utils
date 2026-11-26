@@ -128,13 +128,16 @@ from nui_shared_utils import MetricsPublisher, get_lambda_environment_info
 def handler(event, context):
     env_info = get_lambda_environment_info()
 
-    metrics = MetricsPublisher(namespace="MyService")
-    metrics.add_dimension("Environment", env_info["environment"])
-    metrics.add_dimension("FunctionName", env_info["function_name"])
-    metrics.add_dimension("Region", env_info["aws_region"])
-
-    # Publish metrics with consistent dimensions
-    metrics.put_metric("ProcessedEvents", 1, "Count")
+    with MetricsPublisher(
+        namespace="MyService",
+        dimensions={
+            "Environment": env_info["environment"],
+            "FunctionName": env_info["function_name"],
+            "Region": env_info["aws_region"],
+        },
+    ) as metrics:
+        # Publish metrics with consistent dimensions and flush on context exit
+        metrics.put_metric("ProcessedEvents", 1, "Count")
 
     return {"statusCode": 200}
 ```
@@ -264,7 +267,7 @@ def test_handler_lambda_behavior(monkeypatch):
 
 - [Powertools Integration Guide](powertools-integration.md) - Logger and handler decorators
 - [Quick Start Guide](../getting-started/quickstart.md) - Package usage patterns
-- [CloudWatch Metrics](../getting-started/quickstart.md#cloudwatch-metrics) - Metrics publishing
+- [CloudWatch Metrics](../getting-started/quickstart.md#5-cloudwatch-metrics) - Metrics publishing
 
 ## Support
 
