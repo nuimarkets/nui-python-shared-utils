@@ -916,6 +916,15 @@ def test_mysql_invalid_connect_timeout_bounds(value):
     secret.assert_not_called()
 
 
+@pytest.mark.parametrize("value", [31536001, 1e10, 1e20])
+def test_mysql_read_timeout_upper_bound(value):
+    """Values PyMySQL would hand to socket.settimeout and overflow on fail at construction."""
+    with patch("nui_shared_utils.secrets_helper.get_secret") as secret:
+        with pytest.raises(ValueError, match="read_timeout must be <= 31536000"):
+            DatabaseClient(read_timeout=value)
+    secret.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "value", [None, 0, -1, True, False, "3", 1.0, 1.5, float("nan"), float("inf"), 2147483648, 10**400]
 )

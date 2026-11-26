@@ -63,7 +63,7 @@ postgres = PostgreSQLClient(connect_timeout=3)
 | Client | Argument | Default | Accepted values |
 |--------|----------|---------|-----------------|
 | MySQL | `connect_timeout` | `10` | Positive finite `int` or `float`, at most `31536000` |
-| MySQL | `read_timeout` | `30` | Positive finite `int` or `float`, or `None` for no read limit |
+| MySQL | `read_timeout` | `30` | Positive finite `int` or `float`, at most `31536000`, or `None` for no read limit |
 | PostgreSQL | `connect_timeout` | `5` | Integer seconds from `1` to `2147483647` inclusive |
 
 Invalid values, including booleans, fail with `ValueError` before credentials are fetched

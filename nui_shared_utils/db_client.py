@@ -98,12 +98,11 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
             credentials: Direct credentials dict (keys: host, port, username, password, database),
                 bypasses Secrets Manager
             connect_timeout: Positive finite seconds, at most 31536000 (default: 10)
-            read_timeout: Positive finite seconds per socket read (default: 30), or None for no limit
+            read_timeout: Positive finite seconds per socket read, at most 31536000 (default: 30),
+                or None for no limit
             **kwargs: Additional configuration
         """
         self.connect_timeout = self._validate_timeout("connect_timeout", connect_timeout)
-        if self.connect_timeout > 31536000:
-            raise ValueError("connect_timeout must be <= 31536000 seconds")
         self.read_timeout = None if read_timeout is None else self._validate_timeout("read_timeout", read_timeout)
         self.use_pool = use_pool
         self.pool_size = pool_size
@@ -125,6 +124,10 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
             raise ValueError(f"{name} must be a positive finite number of seconds") from None
         if not math.isfinite(seconds) or seconds <= 0:
             raise ValueError(f"{name} must be a positive finite number of seconds")
+        # PyMySQL's own connect_timeout limit. Applied to read_timeout as well, since PyMySQL
+        # passes it to socket.settimeout after connecting, which overflows on very large values.
+        if seconds > 31536000:
+            raise ValueError(f"{name} must be <= 31536000 seconds")
         return seconds
 
     def _get_default_config_prefix(self) -> str:
