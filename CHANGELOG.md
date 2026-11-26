@@ -8,6 +8,23 @@ that contained them.
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `DatabaseClient.query()` and `PostgreSQLClient.query()` raise the original exception
+  on connection, execution or fetch failures after logging it. Callers must handle errors
+  explicitly instead of treating failures as an empty result. Successful results keep
+  their existing shapes, including MySQL's empty tuple and PostgreSQL's empty list.
+  See [database error handling](docs/getting-started/quickstart.md#2-database-operations)
+  for a migration example.
+
+### Added
+
+- Keyword-only `connect_timeout` and `read_timeout` on `DatabaseClient`, with the existing
+  10-second and 30-second defaults. `read_timeout=None` disables the MySQL read limit.
+  Pooled MySQL connections are separated by timeout settings.
+- Keyword-only `connect_timeout` on `PostgreSQLClient`, with the existing 5-second
+  default. PostgreSQL has no socket `read_timeout` option on this client.
+
 ### Changed
 
 - Secret retrieval uses a default 300-second cache TTL, with keyword-only
