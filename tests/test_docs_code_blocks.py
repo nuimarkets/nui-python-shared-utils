@@ -8,7 +8,6 @@ references stay parseable by being written as ``class``/``def`` stubs.
 import ast
 from pathlib import Path
 import re
-import textwrap
 
 import pytest
 
@@ -17,13 +16,16 @@ pytestmark = pytest.mark.unit
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OPEN_FENCE = re.compile(r"^\s*```(?:python|py)\s*$")
 CLOSE_FENCE = re.compile(r"^\s*```\s*$")
-# Local working docs kept at the repo root are untracked, so CI never sees them.
-LOCAL_DOC_PREFIXES = ("PLAN_", "HANDOVER_", "TRACKING_")
 
 
 def _markdown_files():
-    root_docs = [path for path in REPO_ROOT.glob("*.md") if not path.name.startswith(LOCAL_DOC_PREFIXES)]
-    return sorted([*root_docs, *(REPO_ROOT / "docs").rglob("*.md")])
+    return sorted([*REPO_ROOT.glob("*.md"), *(REPO_ROOT / "docs").rglob("*.md")])
+
+
+def _strip_fence_indent(line, indent):
+    """Remove the fence's own indentation (a fence nested in a list item), keeping any beyond it."""
+    leading = len(line) - len(line.lstrip(" "))
+    return line[min(indent, leading) :]
 
 
 def _python_blocks(path):
@@ -32,13 +34,12 @@ def _python_blocks(path):
     for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if block is None:
             if OPEN_FENCE.match(line):
-                block = (number, [])
+                block = (number, len(line) - len(line.lstrip(" ")), [])
         elif CLOSE_FENCE.match(line):
-            # A fence nested in a list item is indented with its content.
-            yield block[0], textwrap.dedent("\n".join(block[1]))
+            yield block[0], "\n".join(block[2])
             block = None
         else:
-            block[1].append(line)
+            block[2].append(_strip_fence_indent(line, block[1]))
     if block is not None:
         raise AssertionError(f"{path.relative_to(REPO_ROOT)}:{block[0]}: python fence is never closed")
 
