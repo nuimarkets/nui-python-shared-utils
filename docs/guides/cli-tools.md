@@ -16,7 +16,14 @@ pip install nui-python-shared-utils[slack]
 
 # Verify installation
 slack-channel-setup --help
+slack-channel-setup --version
 ```
+
+The executable accepts setup options such as `--config` directly; no subcommand
+prefix is required. `--version` reports the installed `nui-python-shared-utils`
+package version. Python callers retain the grouped Click route
+`cli(["slack", "setup-channels", ...])` and the direct `setup_channels` command
+from `nui_shared_utils.cli`.
 
 ### Quick Start
 
@@ -61,6 +68,11 @@ slack-channel-setup --config channels.yaml --check-only
 # Validate configuration without creating
 slack-channel-setup --config channels.yaml --validate-only
 ```
+
+`--validate-only` checks the local YAML and channel names without a Slack token,
+interactive prompts or Slack API calls. It exits zero for valid definitions and
+nonzero for invalid configuration or names. `--check-only` and `--dry-run` still
+query Slack and require bot access.
 
 ### Features
 
@@ -118,8 +130,8 @@ channels:
 
 #### Channel Naming Rules
 
-- Lowercase letters, numbers, hyphens only
-- Cannot start or end with hyphens
+- Lowercase letters, numbers, hyphens and underscores
+- Cannot start with a hyphen or underscore
 - Maximum 80 characters
 - Cannot contain spaces or special characters
 
