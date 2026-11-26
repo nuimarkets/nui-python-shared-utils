@@ -236,6 +236,108 @@ class TestMetricsPublisher:
         assert len(publisher.metric_buffer) == 1
 
     @patch("boto3.client")
+    def test_flush_retries_only_unacknowledged_batch(self, mock_boto3_client):
+        """A failed second batch must not resubmit the accepted first batch."""
+        accepted_names = []
+        submitted_names = []
+
+        def put_metric_data(*, Namespace, MetricData):
+            assert Namespace == "TestNamespace"
+            names = [metric["MetricName"] for metric in MetricData]
+            submitted_names.append(names)
+            if len(submitted_names) == 2:
+                raise ClientError({"Error": {"Code": "Throttling", "Message": "Retry later"}}, "PutMetricData")
+            accepted_names.extend(names)
+
+        mock_boto3_client.return_value.put_metric_data.side_effect = put_metric_data
+        publisher = MetricsPublisher("TestNamespace", auto_flush_size=100)
+        all_names = [f"Metric{i}" for i in range(25)]
+        for i, name in enumerate(all_names):
+            publisher.put_metric(name, i)
+
+        assert publisher.flush() is False
+        assert accepted_names == all_names[:20]
+        assert [metric["MetricName"] for metric in publisher.metric_buffer] == all_names[20:]
+
+        assert publisher.flush() is True
+        assert submitted_names == [all_names[:20], all_names[20:], all_names[20:]]
+        assert accepted_names == all_names
+        assert publisher.metric_buffer == []
+
+    @patch("boto3.client")
+    def test_flush_preserves_unsent_samples_when_other_errors_propagate(self, mock_boto3_client):
+        """Non-ClientError failures propagate without retrying acknowledged samples."""
+        failure = RuntimeError("Transport failed")
+        mock_client = mock_boto3_client.return_value
+        mock_client.put_metric_data.side_effect = [None, failure]
+        publisher = MetricsPublisher("TestNamespace", auto_flush_size=100)
+        for i in range(25):
+            publisher.put_metric(f"Metric{i}", i)
+
+        with pytest.raises(RuntimeError) as raised:
+            publisher.flush()
+
+        assert raised.value is failure
+        assert [metric["MetricName"] for metric in publisher.metric_buffer] == [f"Metric{i}" for i in range(20, 25)]
+        mock_client.put_metric_data.side_effect = None
+        assert publisher.flush() is True
+        assert len(mock_client.put_metric_data.call_args.kwargs["MetricData"]) == 5
+        assert publisher.metric_buffer == []
+
+    @patch("boto3.client")
+    def test_flush_first_batch_failure_preserves_unattempted_samples(self, mock_boto3_client):
+        """A failed first request retains the failed and unattempted batches in order."""
+        mock_client = mock_boto3_client.return_value
+        mock_client.put_metric_data.side_effect = ClientError(
+            {"Error": {"Code": "Throttling", "Message": "Retry later"}}, "PutMetricData"
+        )
+        publisher = MetricsPublisher("TestNamespace", auto_flush_size=100)
+        for i in range(45):
+            publisher.put_metric(f"Metric{i}", i)
+        pending = list(publisher.metric_buffer)
+
+        assert publisher.flush() is False
+        assert publisher.metric_buffer == pending
+        mock_client.put_metric_data.assert_called_once_with(Namespace="TestNamespace", MetricData=pending[:20])
+
+        mock_client.put_metric_data.reset_mock(side_effect=True)
+        assert publisher.flush() is True
+        assert [call.kwargs["MetricData"] for call in mock_client.put_metric_data.call_args_list] == [
+            pending[:20],
+            pending[20:40],
+            pending[40:],
+        ]
+        assert publisher.metric_buffer == []
+
+    @pytest.mark.parametrize("statistics", [False, True], ids=["value", "statistics"])
+    @patch("boto3.client")
+    def test_auto_flush_recovers_after_partial_failure(self, mock_boto3_client, statistics):
+        """An auto-flush keeps the rejected batch for an explicit retry."""
+        accepted_names = []
+        request_count = 0
+
+        def put_metric_data(*, Namespace, MetricData):
+            nonlocal request_count
+            request_count += 1
+            if request_count == 2:
+                raise ClientError({"Error": {"Code": "Throttling", "Message": "Retry later"}}, "PutMetricData")
+            accepted_names.extend(metric["MetricName"] for metric in MetricData)
+
+        mock_boto3_client.return_value.put_metric_data.side_effect = put_metric_data
+        publisher = MetricsPublisher("TestNamespace", auto_flush_size=25)
+        for i in range(25):
+            if statistics:
+                publisher.put_metric_with_statistics(f"Metric{i}", [i, i + 1])
+            else:
+                publisher.put_metric(f"Metric{i}", i)
+
+        assert accepted_names == [f"Metric{i}" for i in range(20)]
+        assert [metric["MetricName"] for metric in publisher.metric_buffer] == [f"Metric{i}" for i in range(20, 25)]
+        assert publisher.flush() is True
+        assert accepted_names == [f"Metric{i}" for i in range(25)]
+        assert publisher.metric_buffer == []
+
+    @patch("boto3.client")
     def test_context_manager(self, mock_boto3_client):
         """Test context manager functionality."""
         mock_client = Mock()

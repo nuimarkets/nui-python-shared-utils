@@ -37,10 +37,9 @@ nui.configure(
     aws_region="us-east-1"
 )
 
-@nui.handle_lambda_error
 @nui.with_retry(max_attempts=3)
-def lambda_handler(event, context):
-    """Lambda function with automatic error handling and retries."""
+def process_event(event):
+    """Process an event, retrying failures before formatting the response."""
     slack = nui.SlackClient()
     
     # Process your data
@@ -53,7 +52,26 @@ def lambda_handler(event, context):
     )
     
     return {"statusCode": 200, "processed": processed_count}
+
+def lambda_handler(event, context):
+    try:
+        return process_event(event)
+    except Exception as error:
+        return nui.handle_lambda_error(error, {
+            "function_name": context.function_name,
+            "aws_request_id": context.aws_request_id,
+        })
 ```
+
+`handle_lambda_error(error, context_dict)` returns the standard error response.
+Pass a dictionary with the Lambda context attributes shown above. Keep the retry
+operation inside the handler's `try` so exhausted retries reach the error helper.
+
+Returning the error response suits a handler behind API Gateway or a function URL,
+where the response is how the caller learns of the failure. For SQS, EventBridge
+or asynchronous invocations, re-raise instead: a returned response counts as a
+successful invocation, so Lambda neither retries the event nor sends it to a
+dead-letter queue.
 
 ### 2. Database Operations
 
@@ -147,8 +165,8 @@ def send_report(data: dict):
 ```python
 import nui_shared_utils as nui
 
-def track_business_metrics(records_processed: int, processing_time: float):
-    """Publish custom metrics to CloudWatch."""
+def track_business_metrics(records_processed: int, processing_time: float) -> bool:
+    """Publish custom metrics and return whether every batch succeeds."""
     metrics = nui.MetricsPublisher(
         namespace="MyApplication",
         dimensions={"Environment": "production"}
@@ -158,14 +176,27 @@ def track_business_metrics(records_processed: int, processing_time: float):
     metrics.put_metric("RecordsProcessed", records_processed, unit="Count")
     metrics.put_metric("ProcessingTime", processing_time, unit="Milliseconds")
     
-    # Metrics are automatically flushed when the object is destroyed
-    # Or manually flush with: metrics.flush()
+    return metrics.flush()
 ```
+
+Call `flush()` explicitly before returning from a Lambda invocation. A
+`with nui.MetricsPublisher(...) as metrics:` block also flushes on exit, but does
+not raise when `flush()` returns `False`; use an explicit call when the caller
+needs to handle that result. Object destruction does not flush metrics.
+
+`flush()` returns `True` when all buffered batches succeed, including an empty
+buffer, and `False` on a CloudWatch `ClientError`. Each successful request removes
+its batch immediately. A failed request leaves its batch and unattempted samples
+buffered in order, so a later `flush()` retries only those samples. Other exceptions
+propagate. If CloudWatch accepts a request but its response is lost, retrying that
+batch can duplicate samples; the publisher does not provide exactly-once delivery
+or thread safety.
 
 ### 6. Complete Lambda Function Example
 
 ```python
 import os
+from datetime import datetime, timezone
 import nui_shared_utils as nui
 
 # Configure once at module level
@@ -178,62 +209,70 @@ nui.configure(
 )
 
 @nui.track_lambda_performance()
-@nui.handle_lambda_error
-def lambda_handler(event, context):
-    """Complete example with all integrations."""
-    
+def process_records(event, context):
+    """Complete example with all integrations; raises on failure."""
     # Initialize clients
     db = nui.DatabaseClient()
     es = nui.ElasticsearchClient()
     slack = nui.SlackClient()
-    metrics = nui.MetricsPublisher("MyService")
-    
-    try:
-        # Process records
-        records = event.get('records', [])
-        processed = 0
-        
-        for record in records:
-            # Database operation
-            with db.get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        "INSERT INTO processed_records (data) VALUES (%s)",
-                        (record,)
-                    )
-            
-            processed += 1
-        
-        # Log to Elasticsearch
-        es.index_document(
-            index="application-logs",
-            body={
-                "timestamp": nui.get_nz_time(),
-                "level": "INFO",
-                "message": f"Processed {processed} records",
-                "function_name": context.function_name
-            }
-        )
-        
-        # Send notification
-        slack.send_message(
-            channel="#notifications",
-            text=f"Successfully processed {processed} records"
-        )
-        
-        # Custom metrics
-        metrics.put_metric("RecordsProcessed", processed, unit="Count")
-        
-        return {
-            "statusCode": 200,
-            "body": f"Processed {processed} records"
+
+    # Process records
+    records = event.get('records', [])
+    processed = 0
+
+    for record in records:
+        # Database operation
+        with db.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO processed_records (data) VALUES (%s)",
+                    (record,)
+                )
+
+        processed += 1
+
+    # Log to Elasticsearch
+    indexed, failed = es.streaming_bulk(iter([{
+        "_index": "application-logs",
+        "_source": {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": "INFO",
+            "message": f"Processed {processed} records",
+            "function_name": context.function_name
         }
-        
-    except Exception as e:
-        # Error handling is automatic with decorators
-        # Additional custom error handling can go here
-        raise
+    }]), raise_on_error=True)
+    if indexed != 1 or failed:
+        raise RuntimeError("Application log indexing failed")
+
+    # Send notification
+    slack.send_message(
+        channel="#notifications",
+        text=f"Successfully processed {processed} records"
+    )
+
+    # Custom metrics, flushed before returning
+    with nui.MetricsPublisher("MyService") as metrics:
+        metrics.put_metric("RecordsProcessed", processed, unit="Count")
+
+    return {
+        "statusCode": 200,
+        "body": f"Processed {processed} records"
+    }
+
+def lambda_handler(event, context):
+    try:
+        return process_records(event, context)
+    except Exception as error:
+        return nui.handle_lambda_error(error, {
+            "function_name": context.function_name,
+            "aws_request_id": context.aws_request_id,
+        })
 ```
+
+`track_lambda_performance()` counts an invocation as an error only when the
+function it wraps raises. Apply it to the function that does the work and catch
+outside it, as above; a `try` inside the decorated function hides every failure
+from the `LambdaErrors` metric.
 
 ### 7. JWT Authentication for API Gateway
 
@@ -359,7 +398,8 @@ nui.configure(
 ### Error Notifications
 
 ```python
-@nui.handle_lambda_error
+import nui_shared_utils as nui
+
 def lambda_handler(event, context):
     try:
         # Your logic here
@@ -371,7 +411,9 @@ def lambda_handler(event, context):
             channel="#alerts",
             text=f"❌ Lambda error in {context.function_name}: {str(e)}"
         )
-        raise  # Re-raise for proper Lambda error handling
+        # Re-raise so Lambda records the failure; an API Gateway handler can
+        # return nui.handle_lambda_error(e, {...}) instead (see section 1)
+        raise
 ```
 
 ### Retry with Backoff
