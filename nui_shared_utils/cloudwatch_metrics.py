@@ -357,10 +357,10 @@ class TimedMetric:
     Context manager for timing operations and publishing metrics.
 
     Example:
-        publisher = MetricsPublisher('MyApp')
-        with TimedMetric(publisher, 'DatabaseQuery', unit='Milliseconds'):
-            # Perform database query
-            results = db.query("SELECT * FROM records")
+        with MetricsPublisher('MyApp') as publisher:
+            with TimedMetric(publisher, 'DatabaseQuery', unit='Milliseconds'):
+                # Perform database query
+                results = db.query("SELECT * FROM records")
     """
 
     def __init__(

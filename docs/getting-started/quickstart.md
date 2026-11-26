@@ -186,7 +186,6 @@ def lambda_handler(event, context):
     db = nui.DatabaseClient()
     es = nui.ElasticsearchClient()
     slack = nui.SlackClient()
-    metrics = nui.MetricsPublisher("MyService")
     
     try:
         # Process records
@@ -221,8 +220,9 @@ def lambda_handler(event, context):
             text=f"Successfully processed {processed} records"
         )
         
-        # Custom metrics
-        metrics.put_metric("RecordsProcessed", processed, unit="Count")
+        # Custom metrics, flushed before returning
+        with nui.MetricsPublisher("MyService") as metrics:
+            metrics.put_metric("RecordsProcessed", processed, unit="Count")
         
         return {
             "statusCode": 200,

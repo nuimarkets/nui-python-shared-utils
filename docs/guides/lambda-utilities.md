@@ -267,7 +267,7 @@ def test_handler_lambda_behavior(monkeypatch):
 
 - [Powertools Integration Guide](powertools-integration.md) - Logger and handler decorators
 - [Quick Start Guide](../getting-started/quickstart.md) - Package usage patterns
-- [CloudWatch Metrics](../getting-started/quickstart.md#cloudwatch-metrics) - Metrics publishing
+- [CloudWatch Metrics](../getting-started/quickstart.md#5-cloudwatch-metrics) - Metrics publishing
 
 ## Support
 
