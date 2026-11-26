@@ -1026,7 +1026,7 @@ def test_mysql_timeout_pool_replaces_unusable_connection(db_credentials, discard
 
 @pytest.mark.parametrize("unhealthy", [False, True])
 def test_mysql_pool_closes_unreturned_connection(db_credentials, isolated_connection_pool, unhealthy):
-    client = DatabaseClient(credentials=db_credentials, pool_size=0, read_timeout=None)
+    client = DatabaseClient(credentials=db_credentials, pool_size=1 if unhealthy else 0, read_timeout=None)
     conn = MagicMock()
     conn._closed = False
     if unhealthy:
@@ -1041,6 +1041,7 @@ def test_mysql_pool_closes_unreturned_connection(db_credentials, isolated_connec
 def test_mysql_query_failure_still_returns_healthy_connection_to_pool(db_credentials, isolated_connection_pool):
     client = DatabaseClient(credentials=db_credentials, connect_timeout=2, read_timeout=3)
     conn = MagicMock()
+    conn._closed = False
     error = pymysql.ProgrammingError("invalid SQL")
     conn.cursor.return_value.__enter__.return_value.execute.side_effect = error
     with patch("pymysql.connect", return_value=conn):
