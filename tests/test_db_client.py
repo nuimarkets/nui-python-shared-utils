@@ -916,7 +916,9 @@ def test_mysql_invalid_connect_timeout_bounds(value):
     secret.assert_not_called()
 
 
-@pytest.mark.parametrize("value", [None, 0, -1, True, False, "3", 1.0, 1.5, float("nan"), float("inf")])
+@pytest.mark.parametrize(
+    "value", [None, 0, -1, True, False, "3", 1.0, 1.5, float("nan"), float("inf"), 2147483648, 10**400]
+)
 def test_postgresql_invalid_timeout_fails_before_external_work(value):
     with patch("nui_shared_utils.secrets_helper.get_secret") as secret, patch("psycopg2.connect") as connect:
         with pytest.raises(ValueError, match="connect_timeout"):
@@ -926,7 +928,13 @@ def test_postgresql_invalid_timeout_fails_before_external_work(value):
 
 
 @pytest.mark.parametrize(
-    "timeout_kwargs, expected", [({}, 5), ({"connect_timeout": 1}, 1), ({"connect_timeout": 12}, 12)]
+    "timeout_kwargs, expected",
+    [
+        ({}, 5),
+        ({"connect_timeout": 1}, 1),
+        ({"connect_timeout": 12}, 12),
+        ({"connect_timeout": 2147483647}, 2147483647),
+    ],
 )
 def test_postgresql_timeout_arguments(db_credentials, timeout_kwargs, expected):
     client = PostgreSQLClient(credentials={**db_credentials, "port": 5432}, **timeout_kwargs)

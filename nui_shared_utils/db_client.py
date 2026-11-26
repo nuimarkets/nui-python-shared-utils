@@ -445,11 +445,15 @@ class PostgreSQLClient(BaseClient, ServiceHealthMixin):
             use_auth_credentials: Use auth-specific credentials
             credentials: Direct credentials dict (keys: host, port, username, password, database),
                 bypasses Secrets Manager
-            connect_timeout: Positive integer seconds per host (default: 5); libpq uses at least 2 seconds
+            connect_timeout: Integer seconds per host, 1 to 2147483647 inclusive (default: 5)
             **kwargs: Additional configuration
         """
-        if isinstance(connect_timeout, bool) or not isinstance(connect_timeout, int) or connect_timeout <= 0:
-            raise ValueError("connect_timeout must be a positive integer number of seconds")
+        if (
+            isinstance(connect_timeout, bool)
+            or not isinstance(connect_timeout, int)
+            or not 1 <= connect_timeout <= 2147483647
+        ):
+            raise ValueError("connect_timeout must be an integer between 1 and 2147483647 seconds")
         self.connect_timeout = connect_timeout
         if not HAS_POSTGRESQL:
             raise ImportError("psycopg2 is not installed. Install with: pip install psycopg2-binary")

@@ -64,7 +64,7 @@ postgres = PostgreSQLClient(connect_timeout=3)
 |--------|----------|---------|-----------------|
 | MySQL | `connect_timeout` | `10` | Positive finite `int` or `float`, at most `31536000` |
 | MySQL | `read_timeout` | `30` | Positive finite `int` or `float`, or `None` for no read limit |
-| PostgreSQL | `connect_timeout` | `5` | Positive integer seconds |
+| PostgreSQL | `connect_timeout` | `5` | Integer seconds from `1` to `2147483647` inclusive |
 
 Invalid values, including booleans, fail with `ValueError` before credentials are fetched
 or connections are accessed. Settings belong to each client at construction; clients
@@ -73,8 +73,8 @@ values use separate pools. Existing positional constructor arguments keep their 
 Timeout settings do not come from credential dictionaries or environment variables.
 
 MySQL's read timeout applies to individual socket reads. PostgreSQL passes the connection
-limit to libpq, which uses at least two seconds, even when `1` is requested, and applies
-it separately to each host or address attempted. `PostgreSQLClient` exposes no socket
+limit to libpq, which controls effective timing and applies the limit separately to each
+host or address attempted. Timing details depend on the linked libpq version. `PostgreSQLClient` exposes no socket
 `read_timeout`; a server statement timeout has different semantics. These limits are
 not a total query or Lambda invocation deadline; leave time for credential resolution,
 connection setup, multiple reads and application work.
