@@ -215,6 +215,11 @@ class TestMalformedJwt:
         token = _sign_jwt(private_key, claims)
         _assert_token_rejected(token, public_key, "payload")
 
+    def test_signature_verified_before_payload_shape(self, rsa_keypair, second_rsa_keypair):
+        _, _, public_key = rsa_keypair
+        token = _sign_jwt(second_rsa_keypair, [])
+        _assert_token_rejected(token, public_key, "signature verification failed")
+
     @pytest.mark.parametrize("name", ["exp", "nbf"])
     @pytest.mark.parametrize(
         "value",
