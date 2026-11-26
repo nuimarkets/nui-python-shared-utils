@@ -337,7 +337,9 @@ Reviewers should check for:
 
 ### Version Management
 
-Version is defined in both `setup.py` and `pyproject.toml` and should be kept in sync. The package follows semantic versioning.
+Package metadata, dependencies, extras and entry points are defined in `pyproject.toml`.
+`setup.py` is only a compatibility entry point. Versions are derived from git tags by
+setuptools-scm, configured in `pyproject.toml`; the package follows semantic versioning.
 
 ### PyPI Publishing
 

@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 
 
 @click.group()
-@click.version_option(version="0.1.0")
+@click.version_option(package_name="nui-python-shared-utils")
 def cli():
     """AWS Lambda utilities and Slack workspace automation."""
     pass
@@ -38,6 +38,7 @@ def slack():
 
 
 @slack.command("setup-channels")
+@click.version_option(package_name="nui-python-shared-utils")
 @click.option("--config", required=True, type=click.Path(exists=True), help="Path to channel configuration YAML file")
 @click.option("--token", envvar="SLACK_BOT_TOKEN", help="Slack bot token (or use SLACK_BOT_TOKEN env var)")
 @click.option("--check-only", is_flag=True, help="Only check existing channels, do not create")
@@ -209,9 +210,9 @@ def setup_channels(
         sys.exit(1)
 
 
-def main():
-    """Entry point for CLI."""
-    cli()
+def main() -> None:
+    """Run the installed channel-setup command with its documented root options."""
+    setup_channels()
 
 
 if __name__ == "__main__":
