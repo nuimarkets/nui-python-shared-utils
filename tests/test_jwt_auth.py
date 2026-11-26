@@ -229,7 +229,7 @@ class TestMalformedJwt:
     def test_invalid_present_time_claim_rejected(self, rsa_keypair, name, value):
         private_key, _, public_key = rsa_keypair
         token = _sign_jwt(private_key, {"sub": "user123", name: value})
-        _assert_token_rejected(token, public_key, name)
+        _assert_token_rejected(token, public_key, f"Invalid JWT {name} claim")
 
     def test_non_ascii_payload_rejected(self, rsa_keypair):
         _, _, public_key = rsa_keypair
@@ -245,7 +245,8 @@ class TestMalformedJwt:
             signing_input = ".".join(parts[:2]).encode("utf-8")
             signature = private_key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
             parts[2] = _b64url_encode(signature)
-        _assert_token_rejected(".".join(parts), public_key, ["header", "payload", "signature"][segment])
+        name = ["header", "payload", "signature"][segment]
+        _assert_token_rejected(".".join(parts), public_key, f"Invalid JWT {name} encoding: expected unpadded base64url")
 
     @pytest.mark.parametrize("segment", [0, 1, 2], ids=["header", "payload", "signature"])
     def test_empty_segments_rejected(self, rsa_keypair, segment):
@@ -255,7 +256,8 @@ class TestMalformedJwt:
         if segment != 2:
             signature = private_key.sign(".".join(parts[:2]).encode(), padding.PKCS1v15(), hashes.SHA256())
             parts[2] = _b64url_encode(signature)
-        _assert_token_rejected(".".join(parts), public_key, ["header", "payload", "signature"][segment])
+        name = ["header", "payload", "signature"][segment]
+        _assert_token_rejected(".".join(parts), public_key, f"Invalid JWT {name} encoding: expected unpadded base64url")
 
     @pytest.mark.parametrize(
         "claims",
