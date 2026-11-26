@@ -314,6 +314,28 @@ slack_creds = nui.get_slack_credentials("custom-slack-secret")
 api_keys = nui.get_secret("my-service/api-keys")
 ```
 
+### MySQL Connection Pooling
+
+`DatabaseClient` pools connections within the current process by host, port, database,
+authenticated user and password. Pool identifiers in `get_pool_stats()` and debug logs
+are opaque process-local values; they contain no usernames or passwords. The client
+snapshots its connection credentials at construction, so later edits to the original
+credentials dictionary do not change its connection settings. Construct a new client to
+adopt changed credentials.
+
+Every pooled return rolls back any unfinished transaction, including a SELECT-only
+transaction, before checking connection health. Cleanup failure closes the connection
+and preserves any exception from the borrower. Commit writes explicitly inside
+`get_connection()`; the context manager never commits them for you. `execute()` and
+`bulk_insert()` commit their successful writes.
+
+`pool_recycle` limits total connection age from creation across repeated borrows. A
+connection at or beyond that age closes instead of returning to the pool; a nonpositive
+value disables age-based recycling. `aged_connections` in pool statistics counts
+connections created more than one hour ago. `pool_size` limits idle connections per
+identity. A `database=` override bypasses pooling and closes its connection on exit.
+Rollback ends transactions but does not reset arbitrary SQL session variables.
+
 ## Environment-Specific Configuration
 
 ### Development Environment

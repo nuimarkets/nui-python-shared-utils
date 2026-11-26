@@ -10,6 +10,11 @@ that contained them.
 
 ### Fixed
 
+- MySQL pooled connections roll back unfinished transactions before reuse, including
+  SELECT-only transactions, and close if cleanup fails. Pool identities separate
+  users, passwords and connection settings without exposing credentials in diagnostics.
+  Clients snapshot connection credentials at construction, and recycling measures
+  connection age from creation rather than the most recent return to the pool.
 - `SlackClient` logs a warning, once per client, when it renders a Lambda header with no
   AWS account context, naming `set_handler_context(context)` and `powertools_handler` as
   the fixes. The header itself is unchanged.

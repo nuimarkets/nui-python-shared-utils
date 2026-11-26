@@ -44,7 +44,8 @@ class TestDatabaseClient:
         assert client.use_pool is True
         assert client.pool_size == 5
         assert client.pool_recycle == 3600
-        assert client._pool_key == "db.example.com:3306"
+        assert client._pool_key.startswith("mysql:")
+        assert "dbpass" not in client._pool_key
 
     @patch("nui_shared_utils.secrets_helper.get_secret")
     def test_init_custom_values(self, mock_get_creds):
@@ -411,7 +412,7 @@ class TestConnectionRecycling:
     """Tests for connection recycling functionality."""
 
     @pytest.mark.parametrize("expired_age", [3600, 3700], ids=["at-recycle-limit", "past-recycle-limit"])
-    @patch("nui_shared_utils.db_client.time.time", return_value=10000)
+    @patch("nui_shared_utils.db_client.time.monotonic", return_value=10000)
     @patch("nui_shared_utils.db_client._connection_pool", {})
     @patch("nui_shared_utils.db_client.safe_close_connection")
     def test_clean_expired_connections_enabled(self, mock_safe_close, mock_time, expired_age):
@@ -422,9 +423,9 @@ class TestConnectionRecycling:
         pool_key = "test_pool"
         old_conn = Mock()
         fresh_conn = Mock()
-        fresh_entry = {"connection": fresh_conn, "timestamp": mock_time.return_value - 1800}
+        fresh_entry = {"connection": fresh_conn, "created_at": mock_time.return_value - 1800}
         _connection_pool[pool_key] = [
-            {"connection": old_conn, "timestamp": mock_time.return_value - expired_age},
+            {"connection": old_conn, "created_at": mock_time.return_value - expired_age},
             fresh_entry,
         ]
 
@@ -441,7 +442,7 @@ class TestConnectionRecycling:
         client = DatabaseClient(credentials={"host": "db.example.com", "port": 3306}, pool_recycle=0)
         pool_key = "test_pool"
         old_conn = Mock()
-        old_entry = {"connection": old_conn, "timestamp": time.time() - 7200}
+        old_entry = {"connection": old_conn, "created_at": time.monotonic() - 7200}
         _connection_pool[pool_key] = [old_entry]
 
         client._clean_expired_connections(pool_key)
@@ -455,7 +456,7 @@ class TestConnectionRecycling:
         from nui_shared_utils.db_client import _connection_pool
 
         pool_key = "test_pool"
-        current_time = time.time()
+        current_time = time.monotonic()
 
         # Create mock connections with different ages
         fresh_conn = Mock()
@@ -465,8 +466,8 @@ class TestConnectionRecycling:
 
         # Add connections to pool with timestamps
         _connection_pool[pool_key] = [
-            {"connection": fresh_conn, "timestamp": current_time - 1800},  # 30 min old
-            {"connection": aged_conn, "timestamp": current_time - 5400},  # 90 min old (aged)
+            {"connection": fresh_conn, "created_at": current_time - 1800},  # 30 min old
+            {"connection": aged_conn, "created_at": current_time - 5400},  # 90 min old (aged)
         ]
 
         stats = get_pool_stats()
@@ -476,6 +477,330 @@ class TestConnectionRecycling:
         assert stats["pools"][pool_key]["active_connections"] == 2
         assert stats["pools"][pool_key]["healthy_connections"] == 2
         assert stats["pools"][pool_key]["aged_connections"] == 1  # One connection > 1 hour
+
+
+class _TransactionStore:
+    """Minimal transactional driver double with shared committed rows."""
+
+    def __init__(self):
+        self.committed = []
+        self.connections = []
+
+    def connect(self, **settings):
+        connection = _TransactionConnection(self, settings)
+        self.connections.append(connection)
+        return connection
+
+
+class _TransactionConnection:
+    def __init__(self, store, settings):
+        self.store = store
+        self.settings = settings
+        self.pending = []
+        self.snapshot = None
+        self.events = []
+        self.open = True
+        self.rollback_error = None
+        self.ping_error = None
+        self.batch_calls = 0
+        self.fail_batch = None
+
+    def cursor(self):
+        return _TransactionCursor(self)
+
+    def commit(self):
+        self.events.append("commit")
+        self.store.committed.extend(self.pending)
+        self.pending.clear()
+        self.snapshot = None
+
+    def rollback(self):
+        self.events.append("rollback")
+        if self.rollback_error:
+            raise self.rollback_error
+        self.pending.clear()
+        self.snapshot = None
+
+    def ping(self, reconnect=False):
+        assert reconnect is False
+        self.events.append("ping")
+        if self.ping_error:
+            raise self.ping_error
+        if not self.open:
+            raise pymysql.OperationalError(2006, "Connection closed")
+
+    def close(self):
+        self.events.append("close")
+        self.open = False
+        self.pending.clear()
+
+
+class _TransactionCursor:
+    def __init__(self, connection):
+        self.connection = connection
+        self.rowcount = 0
+        self.rows = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def execute(self, sql, params=None):
+        if sql.startswith("SELECT"):
+            if self.connection.snapshot is None:
+                self.connection.snapshot = list(self.connection.store.committed)
+            self.rows = list(self.connection.snapshot)
+        else:
+            self.connection.pending.append(params[0])
+        self.rowcount = 1
+
+    def executemany(self, sql, values):
+        self.connection.batch_calls += 1
+        if self.connection.batch_calls == self.connection.fail_batch:
+            raise pymysql.IntegrityError(1062, "Duplicate synthetic key")
+        self.connection.pending.extend(row[0] for row in values)
+        self.rowcount = len(values)
+
+    def fetchall(self):
+        return self.rows
+
+
+class TestPoolSafety:
+    @pytest.fixture(autouse=True)
+    def isolated_pool(self, monkeypatch):
+        import nui_shared_utils.db_client as module
+
+        self.clock = 0.0
+        self.store = _TransactionStore()
+        self.credentials = {
+            "host": "pool.example.com",
+            "port": 3306,
+            "username": "pool-user",
+            "password": "synthetic-password",
+            "database": "pool-db",
+        }
+        monkeypatch.setattr(module, "_connection_pool", {})
+        monkeypatch.setattr(module.time, "monotonic", lambda: self.clock)
+        monkeypatch.setattr(module.pymysql, "connect", self.store.connect)
+
+    @pytest.mark.parametrize("borrower_fails", [False, True], ids=["normal-return", "exceptional-return"])
+    def test_uncommitted_work_cannot_leak_into_next_commit(self, borrower_fails):
+        client = DatabaseClient(credentials=self.credentials)
+        original = pymysql.OperationalError(1213, "Synthetic borrower failure")
+
+        def borrow():
+            with client.get_connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("UPDATE synthetic", ("abandoned",))
+                if borrower_fails:
+                    raise original
+
+        if borrower_fails:
+            with pytest.raises(pymysql.OperationalError) as caught:
+                borrow()
+            assert caught.value is original
+        else:
+            borrow()
+
+        assert client.execute("UPDATE synthetic", ("intended",)) == 1
+        assert self.store.committed == ["intended"]
+        assert len(self.store.connections) == 1
+        assert self.store.connections[0].events[:2] == ["rollback", "ping"]
+
+    def test_select_only_borrow_ends_transaction_snapshot(self):
+        client = DatabaseClient(credentials=self.credentials)
+        self.store.committed.append({"value": "before"})
+        assert client.query("SELECT synthetic") == [{"value": "before"}]
+        self.store.committed.append({"value": "after"})
+        assert client.query("SELECT synthetic") == [{"value": "before"}, {"value": "after"}]
+        assert len(self.store.connections) == 1
+        assert self.store.connections[0].events.count("rollback") == 2
+
+    def test_partial_bulk_failure_cannot_be_committed_later(self):
+        client = DatabaseClient(credentials=self.credentials)
+        with client.get_connection() as connection:
+            connection.fail_batch = 2
+        with pytest.raises(pymysql.IntegrityError):
+            client.bulk_insert("synthetic", [{"value": 1}, {"value": 2}], batch_size=1)
+        assert client.execute("UPDATE synthetic", (3,)) == 1
+        assert self.store.committed == [3]
+        assert len(self.store.connections) == 1
+
+    def test_explicit_commits_survive_pool_cleanup(self):
+        client = DatabaseClient(credentials=self.credentials)
+        assert client.execute("UPDATE synthetic", (1,)) == 1
+        assert client.bulk_insert("synthetic", [{"value": 2}, {"value": 3}], batch_size=1) == 2
+        assert self.store.committed == [1, 2, 3]
+        assert len(self.store.connections) == 1
+
+    def test_same_identity_clients_reuse_a_connection(self):
+        first = DatabaseClient(credentials=self.credentials)
+        second = DatabaseClient(credentials=dict(self.credentials))
+        with first.get_connection() as one:
+            pass
+        with second.get_connection() as two:
+            pass
+        assert one is two
+        assert len(self.store.connections) == 1
+
+    @pytest.mark.parametrize(
+        ("field", "other"),
+        [
+            ("username", "other-user"),
+            ("password", "rotated-password"),
+            ("database", "other-db"),
+            ("host", "other.example.com"),
+            ("port", 3307),
+        ],
+    )
+    def test_different_connection_settings_never_share(self, field, other):
+        first = DatabaseClient(credentials=self.credentials)
+        other_credentials = dict(self.credentials, **{field: other})
+        second = DatabaseClient(credentials=other_credentials)
+        with first.get_connection() as one:
+            pass
+        with second.get_connection() as two:
+            pass
+        assert one is not two
+        assert one.settings.get({"username": "user"}.get(field, field)) == self.credentials[field]
+        assert two.settings.get({"username": "user"}.get(field, field)) == other
+
+    def test_omitted_default_settings_share_with_explicit_defaults(self):
+        self.credentials.pop("port")
+        self.credentials.pop("database")
+        first = DatabaseClient(credentials=self.credentials)
+        second = DatabaseClient(credentials=dict(self.credentials, port=3306, database="app"))
+        with first.get_connection() as one:
+            pass
+        with second.get_connection() as two:
+            pass
+        assert one is two
+        assert two.settings["port"] == 3306
+        assert two.settings["database"] == "app"
+
+    def test_caller_mutation_cannot_change_identity_or_connection_settings(self):
+        original = dict(self.credentials)
+        first = DatabaseClient(credentials=self.credentials)
+        self.credentials.update(
+            host="changed.example.com",
+            port=3307,
+            username="other-user",
+            password="rotated-password",
+            database="other-db",
+        )
+        second = DatabaseClient(credentials=original)
+        with first.get_connection() as one:
+            pass
+        with second.get_connection() as two:
+            pass
+        assert one is two
+        assert one.settings["host"] == original["host"]
+        assert one.settings["port"] == original["port"]
+        assert one.settings["user"] == original["username"]
+        assert one.settings["password"] == original["password"]
+        assert one.settings["database"] == original["database"]
+
+    def test_pool_diagnostics_do_not_expose_credentials(self, caplog):
+        import logging
+
+        caplog.set_level(logging.DEBUG, logger="nui_shared_utils.db_client")
+        client = DatabaseClient(credentials=self.credentials)
+        with client.get_connection():
+            pass
+        diagnostics = repr(get_pool_stats()) + caplog.text + repr(client._pool_key)
+        for private_value in (self.credentials["username"], self.credentials["password"]):
+            assert private_value not in diagnostics
+
+    def test_recycle_uses_creation_age_across_repeated_borrows(self):
+        client = DatabaseClient(credentials=self.credentials, pool_recycle=3600)
+        with client.get_connection() as first:
+            pass
+        self.clock = 3500
+        with client.get_connection() as still_first:
+            pass
+        self.clock = 7000
+        with client.get_connection() as replacement:
+            pass
+        assert first is still_first
+        assert replacement is not first
+        assert first.open is False
+        assert len(self.store.connections) == 2
+
+    def test_connection_expiring_during_borrow_is_not_returned(self):
+        client = DatabaseClient(credentials=self.credentials, pool_recycle=10)
+        with client.get_connection() as first:
+            self.clock = 10
+        assert first.open is False
+        with client.get_connection() as replacement:
+            pass
+        assert replacement is not first
+
+    @pytest.mark.parametrize("borrower_fails", [False, True])
+    def test_rollback_failure_discards_connection_and_preserves_borrower_error(self, borrower_fails):
+        client = DatabaseClient(credentials=self.credentials)
+        original = pymysql.OperationalError(1213, "Synthetic borrower failure")
+
+        def borrow():
+            with client.get_connection() as connection:
+                connection.rollback_error = pymysql.OperationalError(2006, "Synthetic rollback failure")
+                if borrower_fails:
+                    raise original
+
+        if borrower_fails:
+            with pytest.raises(pymysql.OperationalError) as caught:
+                borrow()
+            assert caught.value is original
+        else:
+            borrow()
+        assert self.store.connections[0].open is False
+        with client.get_connection() as replacement:
+            pass
+        assert replacement is self.store.connections[1]
+
+    def test_pool_limit_closes_excess_connection_after_rollback(self):
+        client = DatabaseClient(credentials=self.credentials, pool_size=1)
+        with client.get_connection() as outer:
+            with client.get_connection() as inner:
+                pass
+        assert outer.open is False
+        assert inner.open is True
+        assert outer.events[:2] == ["rollback", "ping"]
+        with client.get_connection() as reused:
+            assert reused is inner
+
+    def test_dead_connection_is_discarded_and_replaced(self):
+        client = DatabaseClient(credentials=self.credentials)
+        with client.get_connection() as first:
+            pass
+        first.ping_error = pymysql.OperationalError(2006, "Synthetic lost connection")
+        with client.get_connection() as replacement:
+            pass
+        assert replacement is not first
+        assert first.open is False
+
+    def test_failed_health_check_on_return_discards_connection(self):
+        client = DatabaseClient(credentials=self.credentials)
+        with client.get_connection() as first:
+            first.ping_error = pymysql.OperationalError(2006, "Synthetic lost connection")
+        assert first.events == ["rollback", "ping", "close"]
+        with client.get_connection() as replacement:
+            pass
+        assert replacement is not first
+
+    @pytest.mark.parametrize("pool_enabled", [False, True])
+    def test_database_override_bypasses_pool(self, pool_enabled):
+        client = DatabaseClient(credentials=self.credentials, use_pool=pool_enabled)
+        with client.get_connection(database="override-db") as first:
+            pass
+        with client.get_connection(database="override-db") as second:
+            pass
+        assert first is not second
+        assert first.open is False
+        assert second.open is False
+        assert first.settings["database"] == "override-db"
+        assert first.events == ["close"]
 
 
 class TestSafeCloseConnection:
@@ -585,7 +910,8 @@ class TestDatabaseCredentialResolution:
 
         mock_get_creds.assert_not_called()
         assert client.credentials == creds
-        assert client._pool_key == "direct-host:3306"
+        assert client._pool_key.startswith("mysql:")
+        assert "direct-pass" not in client._pool_key
 
     @patch("nui_shared_utils.secrets_helper.get_secret")
     @patch.dict("os.environ", {"DB_HOST": "env-host", "DB_PASSWORD": "env-pass"}, clear=False)

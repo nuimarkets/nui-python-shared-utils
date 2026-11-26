@@ -4,6 +4,8 @@ Refactored Database client using BaseClient for DRY code patterns.
 
 import time
 import logging
+import hmac
+import secrets
 from typing import Dict, List, Optional, Any
 from contextlib import contextmanager
 import pymysql
@@ -25,6 +27,8 @@ log = logging.getLogger(__name__)
 
 # Global connection pool for reuse across invocations
 _connection_pool = {}
+# A process-local HMAC keeps credentials out of observable pool identifiers.
+_pool_identity_secret = secrets.token_bytes(32)
 
 
 def get_pool_stats() -> Dict[str, Any]:
@@ -35,7 +39,7 @@ def get_pool_stats() -> Dict[str, Any]:
         Dictionary with pool status for monitoring
     """
     stats = {"total_pools": len(_connection_pool), "pools": {}}
-    current_time = time.time()
+    current_time = time.monotonic()
 
     for pool_key, connection_entries in _connection_pool.items():
         pool_stats = {
@@ -49,8 +53,8 @@ def get_pool_stats() -> Dict[str, Any]:
         aged = 0
         for entry in connection_entries:
             conn = entry["connection"]
-            timestamp = entry["timestamp"]
-            age = current_time - timestamp
+            created_at = entry["created_at"]
+            age = current_time - created_at
 
             try:
                 conn.ping(reconnect=False)
@@ -101,8 +105,21 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
 
         super().__init__(secret_name=secret_name, credentials=credentials, **kwargs)
 
-        # Build pool key for connection management
-        self._pool_key = f"{self.credentials['host']}:{self.credentials['port']}"
+        # Snapshot once so caller mutation cannot separate pool identity from settings.
+        self.credentials = dict(self.credentials)
+        self._connection_credentials = dict(self.credentials)
+        self._connection_credentials.setdefault("port", 3306)
+        self._connection_credentials.setdefault("database", "app")
+        identity = (
+            self._connection_credentials["host"],
+            self._connection_credentials["port"],
+            self._connection_credentials.get("username"),
+            self._connection_credentials.get("password"),
+            self._connection_credentials["database"],
+            10,  # connect_timeout
+            30,  # read_timeout
+        )
+        self._pool_key = "mysql:" + hmac.digest(_pool_identity_secret, repr(identity).encode("utf-8"), "sha256").hex()
 
     def _get_default_config_prefix(self) -> str:
         """Return configuration prefix for database."""
@@ -140,7 +157,7 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
         if pool_key not in _connection_pool:
             return
 
-        current_time = time.time()
+        current_time = time.monotonic()
         pool_entries = _connection_pool[pool_key]
 
         # Filter out expired connections
@@ -148,7 +165,7 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
         expired_count = 0
 
         for entry in pool_entries:
-            age = current_time - entry["timestamp"]
+            age = current_time - entry["created_at"]
             if age >= self.pool_recycle:
                 safe_close_connection(entry["connection"])
                 expired_count += 1
@@ -163,103 +180,79 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
     @contextmanager
     def get_connection(self, database: Optional[str] = None):
         """
-        Context manager for database connections with pooling support.
+        Borrow a connection; commit explicitly to keep writes.
 
-        Args:
-            database: Override default database
-
-        Yields:
-            Database connection object
+        Pooled returns roll back any remaining transaction before reuse. A
+        database override uses a separate connection that closes on exit.
         """
         connection = None
-        pool_key = None
+        created_at = None
+        pool_key = self._pool_key if self.use_pool and not database else None
 
         try:
-            # Use pooling if enabled and for default database only
-            if self.use_pool and not database:
-                pool_key = f"{self._pool_key}_{self.credentials.get('database', 'app')}"
-                current_time = time.time()
+            if pool_key:
+                pool_entries = _connection_pool.get(pool_key, [])
+                while pool_entries:
+                    entry = pool_entries.pop()
+                    conn = entry["connection"]
+                    age = time.monotonic() - entry["created_at"]
+                    if self.pool_recycle and self.pool_recycle > 0 and age >= self.pool_recycle:
+                        safe_close_connection(conn)
+                        log.debug(f"Recycled expired connection (age: {age:.1f}s) for {pool_key}")
+                        continue
 
-                # Try to get from pool first
-                if pool_key in _connection_pool:
-                    pool_entries = _connection_pool[pool_key]
+                    try:
+                        conn.ping(reconnect=False)
+                    except Exception:
+                        safe_close_connection(conn)
+                        log.debug(f"Closed dead pooled connection for {pool_key}")
+                        continue
 
-                    # Look for a fresh, healthy connection
-                    while pool_entries:
-                        entry = pool_entries.pop()
-                        conn = entry["connection"]
-                        timestamp = entry["timestamp"]
-                        age = current_time - timestamp
+                    connection = conn
+                    created_at = entry["created_at"]
+                    log.debug(f"Reused pooled connection (age: {age:.1f}s) for {pool_key}")
+                    break
 
-                        # Check if connection has exceeded recycle time
-                        if self.pool_recycle and self.pool_recycle > 0 and age >= self.pool_recycle:
-                            safe_close_connection(conn)
-                            log.debug(f"Recycled expired connection (age: {age:.1f}s) for {pool_key}")
-                            continue
-
-                        # Test if connection is still alive
-                        try:
-                            conn.ping(reconnect=False)
-                            connection = conn
-                            log.debug(f"Reused pooled connection (age: {age:.1f}s) for {pool_key}")
-                            break
-                        except Exception as e:
-                            safe_close_connection(conn)
-                            log.debug(f"Closed dead pooled connection for {pool_key}: {e}")
-                            continue
-
-            # Create new connection if no pooled connection available
             if connection is None:
+                credentials = self._connection_credentials
                 connection = pymysql.connect(
-                    host=self.credentials["host"],
-                    port=self.credentials.get("port", 3306),
-                    user=self.credentials["username"],
-                    password=self.credentials["password"],
-                    database=database or self.credentials.get("database", "app"),
+                    host=credentials["host"],
+                    port=credentials["port"],
+                    user=credentials["username"],
+                    password=credentials["password"],
+                    database=database or credentials["database"],
                     charset="utf8mb4",
                     cursorclass=pymysql.cursors.DictCursor,
                     connect_timeout=10,
                     read_timeout=30,
                 )
-                if self.use_pool and not database:
+                created_at = time.monotonic()
+                if pool_key:
                     log.debug(f"Created new pooled connection for {pool_key}")
 
             yield connection
 
         finally:
-            if connection:
-                # Return to pool if pooling enabled and healthy
-                if self.use_pool and not database and pool_key:
+            if connection is not None:
+                if pool_key:
                     try:
-                        # Test connection health before returning to pool
+                        # SELECTs also hold a transaction snapshot. End it before reuse.
+                        connection.rollback()
                         connection.ping(reconnect=False)
-
-                        # Initialize pool for this key if needed
-                        if pool_key not in _connection_pool:
-                            _connection_pool[pool_key] = []
-
-                        # Clean up expired connections before adding new one
                         self._clean_expired_connections(pool_key)
-
-                        # Add back to pool if under limit
-                        if len(_connection_pool[pool_key]) < self.pool_size:
-                            entry = {"connection": connection, "timestamp": time.time()}
-                            _connection_pool[pool_key].append(entry)
-                            log.debug(
-                                f"Returned connection to pool {pool_key} "
-                                f"(pool size: {len(_connection_pool[pool_key])})"
-                            )
+                        age = time.monotonic() - created_at
+                        expired = self.pool_recycle and self.pool_recycle > 0 and age >= self.pool_recycle
+                        pool_entries = _connection_pool.setdefault(pool_key, [])
+                        if not expired and len(pool_entries) < self.pool_size:
+                            pool_entries.append({"connection": connection, "created_at": created_at})
+                            log.debug(f"Returned connection to pool {pool_key} " f"(pool size: {len(pool_entries)})")
                         else:
-                            # Pool full, close connection
                             safe_close_connection(connection)
-                            log.debug(f"Pool {pool_key} full, closed connection")
-                    except Exception as e:
-                        # Connection unhealthy, close it
+                    except Exception:
+                        # Cleanup must not replace an exception from the borrower.
                         safe_close_connection(connection)
-                        log.debug(f"Connection unhealthy, closed instead of pooling: {e}")
-                        connection = None
+                        log.debug(f"Connection cleanup failed; discarded connection for {pool_key}")
                 else:
-                    # Not using pooling, close immediately
                     safe_close_connection(connection)
 
     @handle_client_errors(default_return=[])
@@ -384,10 +377,10 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
             Dictionary with connection details
         """
         return {
-            "host": self.credentials["host"],
-            "port": self.credentials["port"],
-            "database": self.credentials["database"],
-            "username": self.credentials["username"],
+            "host": self._connection_credentials["host"],
+            "port": self._connection_credentials["port"],
+            "database": self._connection_credentials["database"],
+            "username": self._connection_credentials["username"],
             "pool_enabled": self.use_pool,
             "pool_size": self.pool_size,
             "pool_recycle_seconds": self.pool_recycle,

@@ -76,6 +76,24 @@ def get_user_data(user_id: int):
             return cursor.fetchone()
 ```
 
+Pooled connections roll back unfinished work on exit, including SELECT-only
+transactions. Commit writes before leaving a borrowed connection:
+
+```python
+def set_user_active(user_id: int, active: bool):
+    db = nui.DatabaseClient()
+    with db.get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("UPDATE users SET active = %s WHERE id = %s", (active, user_id))
+        conn.commit()
+```
+
+`db.execute()` and `db.bulk_insert()` commit their successful writes. A failed
+borrower cannot leave pending work for a later borrower to commit. Connections with
+different credentials use separate pools, and `pool_recycle` measures their age from
+creation. See [MySQL connection pooling](configuration.md#mysql-connection-pooling)
+for cleanup, credential snapshot and database-override behavior.
+
 ### 3. Elasticsearch Search
 
 ```python
