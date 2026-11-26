@@ -3,8 +3,9 @@ Refactored Database client using BaseClient for DRY code patterns.
 """
 
 import time
+import math
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Sequence
 from contextlib import contextmanager
 import pymysql
 
@@ -81,6 +82,9 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
         pool_size: int = 5,
         pool_recycle: int = 3600,
         credentials: Optional[Dict[str, Any]] = None,
+        *,
+        connect_timeout: float = 10,
+        read_timeout: Optional[float] = 30,
         **kwargs,
     ):
         """
@@ -93,8 +97,14 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
             pool_recycle: Recycle connections after seconds
             credentials: Direct credentials dict (keys: host, port, username, password, database),
                 bypasses Secrets Manager
+            connect_timeout: Positive finite seconds, at most 31536000 (default: 10)
+            read_timeout: Positive finite seconds per socket read (default: 30), or None for no limit
             **kwargs: Additional configuration
         """
+        self.connect_timeout = self._validate_timeout("connect_timeout", connect_timeout)
+        if self.connect_timeout > 31536000:
+            raise ValueError("connect_timeout must be <= 31536000 seconds")
+        self.read_timeout = None if read_timeout is None else self._validate_timeout("read_timeout", read_timeout)
         self.use_pool = use_pool
         self.pool_size = pool_size
         self.pool_recycle = pool_recycle
@@ -103,6 +113,19 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
 
         # Build pool key for connection management
         self._pool_key = f"{self.credentials['host']}:{self.credentials['port']}"
+
+    @staticmethod
+    def _validate_timeout(name: str, value: float) -> float:
+        """Normalize numeric seconds before credentials or connections are accessed."""
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{name} must be a positive finite number of seconds")
+        try:
+            seconds = float(value)
+        except OverflowError:
+            raise ValueError(f"{name} must be a positive finite number of seconds") from None
+        if not math.isfinite(seconds) or seconds <= 0:
+            raise ValueError(f"{name} must be a positive finite number of seconds")
+        return seconds
 
     def _get_default_config_prefix(self) -> str:
         """Return configuration prefix for database."""
@@ -177,7 +200,10 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
         try:
             # Use pooling if enabled and for default database only
             if self.use_pool and not database:
-                pool_key = f"{self._pool_key}_{self.credentials.get('database', 'app')}"
+                pool_key = (
+                    f"{self._pool_key}_{self.credentials.get('database', 'app')}"
+                    f"_timeouts={self.connect_timeout!r},{self.read_timeout!r}"
+                )
                 current_time = time.time()
 
                 # Try to get from pool first
@@ -218,8 +244,8 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
                     database=database or self.credentials.get("database", "app"),
                     charset="utf8mb4",
                     cursorclass=pymysql.cursors.DictCursor,
-                    connect_timeout=10,
-                    read_timeout=30,
+                    connect_timeout=self.connect_timeout,
+                    read_timeout=self.read_timeout,
                 )
                 if self.use_pool and not database:
                     log.debug(f"Created new pooled connection for {pool_key}")
@@ -262,8 +288,8 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
                     # Not using pooling, close immediately
                     safe_close_connection(connection)
 
-    @handle_client_errors(default_return=[])
-    def query(self, sql: str, params: Optional[tuple] = None, database: Optional[str] = None) -> List[Dict]:
+    @handle_client_errors(reraise=True)
+    def query(self, sql: str, params: Optional[tuple] = None, database: Optional[str] = None) -> Sequence[Dict]:
         """
         Execute a SELECT query with error handling.
 
@@ -273,7 +299,10 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
             database: Override default database
 
         Returns:
-            List of result rows as dictionaries
+            Driver result: a list of row dictionaries, or an empty tuple for no rows.
+
+        Raises:
+            Exception: The original connection, execution or fetch error, after logging.
         """
 
         def _query_operation():
@@ -404,6 +433,8 @@ class PostgreSQLClient(BaseClient, ServiceHealthMixin):
         secret_name: Optional[str] = None,
         use_auth_credentials: bool = True,
         credentials: Optional[Dict[str, Any]] = None,
+        *,
+        connect_timeout: int = 5,
         **kwargs,
     ):
         """
@@ -414,8 +445,12 @@ class PostgreSQLClient(BaseClient, ServiceHealthMixin):
             use_auth_credentials: Use auth-specific credentials
             credentials: Direct credentials dict (keys: host, port, username, password, database),
                 bypasses Secrets Manager
+            connect_timeout: Positive integer seconds per host (default: 5); libpq uses at least 2 seconds
             **kwargs: Additional configuration
         """
+        if isinstance(connect_timeout, bool) or not isinstance(connect_timeout, int) or connect_timeout <= 0:
+            raise ValueError("connect_timeout must be a positive integer number of seconds")
+        self.connect_timeout = connect_timeout
         if not HAS_POSTGRESQL:
             raise ImportError("psycopg2 is not installed. Install with: pip install psycopg2-binary")
 
@@ -475,7 +510,7 @@ class PostgreSQLClient(BaseClient, ServiceHealthMixin):
                 "user": self.credentials["username"],
                 "password": self.credentials["password"],
                 "database": database or self.credentials.get("database", "postgres"),
-                "connect_timeout": 5,
+                "connect_timeout": self.connect_timeout,
             }
 
             connection = psycopg2.connect(**connect_params)
@@ -484,7 +519,7 @@ class PostgreSQLClient(BaseClient, ServiceHealthMixin):
             if connection:
                 connection.close()
 
-    @handle_client_errors(default_return=[])
+    @handle_client_errors(reraise=True)
     def query(self, sql: str, params: Optional[tuple] = None, database: Optional[str] = None) -> List[Dict]:
         """
         Execute PostgreSQL SELECT query.
@@ -495,7 +530,10 @@ class PostgreSQLClient(BaseClient, ServiceHealthMixin):
             database: Override default database
 
         Returns:
-            List of result rows as dictionaries
+            List of result rows as dictionaries; an empty list for no rows.
+
+        Raises:
+            Exception: The original connection, execution or fetch error, after logging.
         """
 
         def _query_operation():

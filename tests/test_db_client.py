@@ -11,6 +11,7 @@ import time
 import pymysql
 from nui_shared_utils.db_client import (
     DatabaseClient,
+    PostgreSQLClient,
     get_pool_stats,
     safe_close_connection,
 )
@@ -220,9 +221,10 @@ class TestQuery:
         with patch.object(client, "get_connection") as mock_get_conn:
             mock_get_conn.side_effect = Exception("Database error")
 
-            results = client.query("SELECT * FROM test")
+            with pytest.raises(Exception, match="Database error") as exc_info:
+                client.query("SELECT * FROM test")
 
-        assert results == []  # Should return empty list on error
+        assert exc_info.value is mock_get_conn.side_effect
 
 
 class TestExecute:
@@ -788,3 +790,276 @@ class TestPostgreSQLCredentialResolution:
         monkeypatch.setenv("DB_PORT", "not-a-port")
         with pytest.raises(ValueError, match="DB_PORT must be an integer"):
             PostgreSQLClient()
+
+
+@pytest.fixture(autouse=True)
+def isolated_connection_pool(monkeypatch):
+    """Each test owns its pool without disturbing another test's connections."""
+    pool = {}
+    monkeypatch.setattr("nui_shared_utils.db_client._connection_pool", pool)
+    return pool
+
+
+@pytest.fixture
+def db_credentials():
+    return {"host": "db.example.com", "port": 3306, "username": "reader", "password": "test", "database": "app"}
+
+
+@pytest.fixture(params=["mysql", "postgresql"])
+def query_driver(request, db_credentials):
+    """Patch the driver boundary while exercising actual connection context managers."""
+    if request.param == "mysql":
+        client = DatabaseClient(credentials=db_credentials, use_pool=False)
+        target = "nui_shared_utils.db_client.pymysql.connect"
+        errors = pymysql
+    else:
+        import psycopg2
+
+        client = PostgreSQLClient(credentials={**db_credentials, "port": 5432})
+        target = "nui_shared_utils.db_client.psycopg2.connect"
+        errors = psycopg2
+    conn = MagicMock()
+    conn._closed = False
+    cursor = conn.cursor.return_value.__enter__.return_value
+    with patch(target, return_value=conn) as connect:
+        yield client, connect, conn, cursor, errors
+
+
+@pytest.mark.parametrize("failure_stage", ["connect", "execute", "fetchall"])
+@pytest.mark.parametrize("error_name", ["OperationalError", "ProgrammingError", "InterfaceError"])
+def test_query_propagates_original_driver_error(query_driver, failure_stage, error_name):
+    client, connect, conn, cursor, errors = query_driver
+    error = getattr(errors, error_name)("query failed")
+    if failure_stage == "connect":
+        connect.side_effect = error
+    else:
+        getattr(cursor, failure_stage).side_effect = error
+    with pytest.raises(type(error)) as raised:
+        client.query("SELECT id FROM users WHERE id = %s", (7,))
+    assert raised.value is error
+    if failure_stage == "connect":
+        conn.close.assert_not_called()
+    else:
+        conn.cursor.return_value.__exit__.assert_called_once()
+        conn.close.assert_called_once()
+
+
+@pytest.mark.parametrize("rows", [[], [{"id": 7}]])
+def test_query_preserves_rows_and_forwards_parameters(query_driver, rows):
+    client, connect, conn, cursor, _ = query_driver
+    cursor.fetchall.return_value = rows
+    assert client.query("SELECT id FROM users WHERE id = %s", (7,), database="reports") == rows
+    cursor.execute.assert_called_once_with("SELECT id FROM users WHERE id = %s", (7,))
+    assert connect.call_args.kwargs["database"] == "reports"
+    conn.close.assert_called_once()
+    if isinstance(client, PostgreSQLClient):
+        import psycopg2.extras
+
+        conn.cursor.assert_called_once_with(cursor_factory=psycopg2.extras.DictCursor)
+
+
+@pytest.mark.parametrize("rows, expected", [((), ()), (((7,),), [{"id": 7}])])
+def test_mysql_query_preserves_real_dictcursor_results(db_credentials, rows, expected):
+    """Process a stub server result through the real driver's row conversion."""
+    from types import SimpleNamespace
+
+    connection = pymysql.connections.Connection(defer_connect=True)
+    connection._result = SimpleNamespace(
+        affected_rows=len(rows),
+        warning_count=0,
+        description=(("id",),),
+        insert_id=None,
+        rows=rows,
+        fields=[SimpleNamespace(name="id", table_name="users")],
+        has_next=False,
+    )
+    cursor = connection.cursor(pymysql.cursors.DictCursor)
+    cursor._do_get_result()
+    cursor._executed = "SELECT id FROM users"
+    client = DatabaseClient(credentials=db_credentials, use_pool=False)
+    with patch("nui_shared_utils.db_client.pymysql.connect", return_value=connection):
+        with patch.object(connection, "cursor", return_value=cursor), patch.object(cursor, "execute"):
+            result = client.query("SELECT id FROM users")
+    assert result == expected
+    assert type(result) is type(expected)
+
+
+@pytest.mark.parametrize("connect_timeout, read_timeout", [(10, 30), (0.25, 1.5), (31536000, None)])
+def test_mysql_timeout_arguments(db_credentials, connect_timeout, read_timeout):
+    client = DatabaseClient(
+        credentials=db_credentials, use_pool=False, connect_timeout=connect_timeout, read_timeout=read_timeout
+    )
+    with patch("nui_shared_utils.db_client.pymysql.connect") as connect:
+        with client.get_connection():
+            pass
+    assert connect.call_args.kwargs["connect_timeout"] == connect_timeout
+    assert connect.call_args.kwargs["read_timeout"] == read_timeout
+
+
+@pytest.mark.parametrize("setting", ["connect_timeout", "read_timeout"])
+@pytest.mark.parametrize(
+    "value", [0, -1, float("nan"), float("inf"), -float("inf"), True, False, "3", object(), 10**400]
+)
+def test_mysql_invalid_timeouts_fail_before_external_work(setting, value):
+    with patch("nui_shared_utils.secrets_helper.get_secret") as secret, patch("pymysql.connect") as connect:
+        with pytest.raises(ValueError, match=setting):
+            DatabaseClient(**{setting: value})
+    secret.assert_not_called()
+    connect.assert_not_called()
+
+
+@pytest.mark.parametrize("value", [None, 31536001])
+def test_mysql_invalid_connect_timeout_bounds(value):
+    with patch("nui_shared_utils.secrets_helper.get_secret") as secret:
+        with pytest.raises(ValueError, match="connect_timeout"):
+            DatabaseClient(connect_timeout=value)
+    secret.assert_not_called()
+
+
+@pytest.mark.parametrize("value", [None, 0, -1, True, False, "3", 1.0, 1.5, float("nan"), float("inf")])
+def test_postgresql_invalid_timeout_fails_before_external_work(value):
+    with patch("nui_shared_utils.secrets_helper.get_secret") as secret, patch("psycopg2.connect") as connect:
+        with pytest.raises(ValueError, match="connect_timeout"):
+            PostgreSQLClient(connect_timeout=value)
+    secret.assert_not_called()
+    connect.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "timeout_kwargs, expected", [({}, 5), ({"connect_timeout": 1}, 1), ({"connect_timeout": 12}, 12)]
+)
+def test_postgresql_timeout_arguments(db_credentials, timeout_kwargs, expected):
+    client = PostgreSQLClient(credentials={**db_credentials, "port": 5432}, **timeout_kwargs)
+    with patch("psycopg2.connect") as connect:
+        with client.get_connection(database="reports"):
+            pass
+    assert connect.call_args.kwargs["connect_timeout"] == expected
+    assert connect.call_args.kwargs["database"] == "reports"
+    assert "read_timeout" not in connect.call_args.kwargs
+    connect.return_value.close.assert_called_once()
+
+
+@pytest.mark.parametrize("settings", [{"connect_timeout": 2}, {"read_timeout": 3}, {"read_timeout": None}])
+def test_mysql_pool_separates_different_timeout_settings(db_credentials, isolated_connection_pool, settings):
+    first = DatabaseClient(credentials=db_credentials)
+    second = DatabaseClient(credentials=db_credentials, **settings)
+    connections = [MagicMock(), MagicMock()]
+    with patch("pymysql.connect", side_effect=connections) as connect:
+        with first.get_connection() as one:
+            assert one is connections[0]
+        with second.get_connection() as two:
+            assert two is connections[1]
+        with first.get_connection() as reused:
+            assert reused is one
+        with second.get_connection() as reused:
+            assert reused is two
+    assert connect.call_count == 2
+    assert len(isolated_connection_pool) == 2
+    stats = get_pool_stats()
+    assert all(isinstance(key, str) for key in stats["pools"])
+    assert all(value["healthy_connections"] == 1 for value in stats["pools"].values())
+
+
+def test_mysql_pool_reuses_equivalent_timeouts(db_credentials, isolated_connection_pool):
+    first = DatabaseClient(credentials=db_credentials, connect_timeout=2, read_timeout=3)
+    second = DatabaseClient(credentials=db_credentials, connect_timeout=2.0, read_timeout=3.0)
+    with patch("pymysql.connect") as connect:
+        with first.get_connection() as one:
+            pass
+        with second.get_connection() as two:
+            assert two is one
+    connect.assert_called_once()
+    assert len(isolated_connection_pool) == 1
+    one.ping.assert_any_call(reconnect=False)
+
+
+def test_mysql_database_override_does_not_use_pool(db_credentials, isolated_connection_pool):
+    client = DatabaseClient(credentials=db_credentials, connect_timeout=2, read_timeout=None)
+    connections = [MagicMock(), MagicMock()]
+    connections[1]._closed = False
+    with patch("pymysql.connect", side_effect=connections) as connect:
+        with client.get_connection() as pooled:
+            pass
+        with client.get_connection(database="reports") as override:
+            assert override is not pooled
+        with client.get_connection() as reused:
+            assert reused is pooled
+    assert connect.call_count == 2
+    assert connect.call_args.kwargs["database"] == "reports"
+    assert connect.call_args.kwargs["connect_timeout"] == 2
+    assert connect.call_args.kwargs["read_timeout"] is None
+    override.close.assert_called_once()
+    assert len(isolated_connection_pool) == 1
+
+
+@pytest.mark.parametrize("discard", ["expired", "dead"])
+def test_mysql_timeout_pool_replaces_unusable_connection(db_credentials, discard):
+    client = DatabaseClient(credentials=db_credentials, connect_timeout=2, read_timeout=3, pool_recycle=10)
+    old, fresh = MagicMock(), MagicMock()
+    old._closed = False
+    with (
+        patch("pymysql.connect", side_effect=[old, fresh]) as connect,
+        patch("nui_shared_utils.db_client.time.time") as clock,
+    ):
+        clock.return_value = 100
+        with client.get_connection():
+            pass
+        if discard == "expired":
+            clock.return_value = 110
+        else:
+            old.ping.side_effect = pymysql.OperationalError("connection lost")
+        with client.get_connection() as replacement:
+            assert replacement is fresh
+    old.close.assert_called_once()
+    assert connect.call_count == 2
+    assert connect.call_args.kwargs["connect_timeout"] == 2
+    assert connect.call_args.kwargs["read_timeout"] == 3
+
+
+@pytest.mark.parametrize("unhealthy", [False, True])
+def test_mysql_pool_closes_unreturned_connection(db_credentials, isolated_connection_pool, unhealthy):
+    client = DatabaseClient(credentials=db_credentials, pool_size=0, read_timeout=None)
+    conn = MagicMock()
+    conn._closed = False
+    if unhealthy:
+        conn.ping.side_effect = pymysql.OperationalError("connection lost")
+    with patch("pymysql.connect", return_value=conn):
+        with client.get_connection():
+            pass
+    conn.close.assert_called_once()
+    assert not any(isolated_connection_pool.values())
+
+
+def test_mysql_query_failure_still_returns_healthy_connection_to_pool(db_credentials, isolated_connection_pool):
+    client = DatabaseClient(credentials=db_credentials, connect_timeout=2, read_timeout=3)
+    conn = MagicMock()
+    error = pymysql.ProgrammingError("invalid SQL")
+    conn.cursor.return_value.__enter__.return_value.execute.side_effect = error
+    with patch("pymysql.connect", return_value=conn):
+        with pytest.raises(pymysql.ProgrammingError) as raised:
+            client.query("invalid SQL")
+    assert raised.value is error
+    conn.cursor.return_value.__exit__.assert_called_once()
+    conn.close.assert_not_called()
+    assert next(iter(isolated_connection_pool.values()))[0]["connection"] is conn
+
+
+def test_timeout_options_preserve_positional_credentials(db_credentials):
+    mysql = DatabaseClient(None, False, 4, 90, db_credentials, connect_timeout=1, read_timeout=None)
+    postgres = PostgreSQLClient(None, False, db_credentials, connect_timeout=1)
+    assert mysql.credentials is db_credentials
+    assert (mysql.use_pool, mysql.pool_size, mysql.pool_recycle) == (False, 4, 90)
+    assert postgres.credentials is db_credentials
+    assert postgres.use_auth_credentials is False
+
+
+@pytest.mark.parametrize("connect_timeout, read_timeout", [(0.25, 1.5), (31536000, None)])
+def test_mysql_timeout_values_are_accepted_by_real_driver(db_credentials, connect_timeout, read_timeout):
+    client = DatabaseClient(credentials=db_credentials, connect_timeout=connect_timeout, read_timeout=read_timeout)
+    connection = pymysql.connections.Connection(
+        defer_connect=True,
+        connect_timeout=client.connect_timeout,
+        read_timeout=client.read_timeout,
+    )
+    assert connection.connect_timeout == connect_timeout
+    assert connection._read_timeout == read_timeout
