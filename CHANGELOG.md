@@ -10,6 +10,10 @@ that contained them.
 
 ### Fixed
 
+- The installed `slack-channel-setup` executable accepts documented setup options
+  directly, including `--config` and `--validate-only`. Python callers retain the
+  grouped CLI route, and both commands report the installed package version.
+
 - `SlackClient` logs a warning, once per client, when it renders a Lambda header with no
   AWS account context, naming `set_handler_context(context)` and `powertools_handler` as
   the fixes. The header itself is unchanged.

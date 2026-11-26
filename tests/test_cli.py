@@ -1,5 +1,6 @@
 """Exercise channel setup through the CLI with Slack's WebClient mocked."""
 
+import re
 from unittest.mock import Mock, call, patch
 
 import pytest
@@ -127,3 +128,45 @@ def test_setup_channel_skips_remaining_steps_when_channel_id_is_unresolved():
         for name in helper_names:
             getattr(creator, name).assert_not_called()
         sleep.assert_not_called()
+
+
+@pytest.mark.parametrize("grouped", [False, True], ids=["setup-command", "python-group"])
+def test_validate_only_preserves_python_command_routes(tmp_path, grouped):
+    from nui_shared_utils.cli import cli
+
+    config = tmp_path / "channels.yaml"
+    config.write_text(
+        "channels:\n  - name: sample-alerts\n    description: Synthetic channel\n"
+        "    purpose: Synthetic alerts\n    topic: Test setup\n"
+    )
+    command = cli if grouped else setup_channels
+    args = ["slack", "setup-channels"] if grouped else []
+    args += ["--config", str(config), "--validate-only"]
+    with (
+        patch("nui_shared_utils.cli.ChannelCreator") as creator,
+        patch("nui_shared_utils.cli.SlackSetupHelper") as helper,
+        patch("nui_shared_utils.cli.prompt_for_token") as prompt,
+    ):
+        result = CliRunner().invoke(command, args, env={"SLACK_BOT_TOKEN": None})
+    assert result.exit_code == 0, result.output
+    assert "All channel names are valid" in result.output
+    creator.assert_not_called()
+    helper.assert_not_called()
+    prompt.assert_not_called()
+
+
+@pytest.mark.parametrize("grouped", [False, True], ids=["setup-command", "python-group"])
+def test_python_commands_expose_help_and_installed_version(grouped):
+    from importlib.metadata import version
+
+    from nui_shared_utils.cli import cli
+
+    command = cli if grouped else setup_channels
+    runner = CliRunner()
+    help_result = runner.invoke(command, ["--help"])
+    assert help_result.exit_code == 0, help_result.output
+    declaration = r"^\s+slack\s" if grouped else r"^\s+--config PATH\s"
+    assert re.search(declaration, help_result.output, re.MULTILINE), help_result.output
+    version_result = runner.invoke(command, ["--version"])
+    assert version_result.exit_code == 0, version_result.output
+    assert f"version {version('nui-python-shared-utils')}" in version_result.output
