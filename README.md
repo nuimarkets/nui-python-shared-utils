@@ -270,8 +270,9 @@ def lambda_handler(event, context):
 
 A token that passes the signature and expiry check can still have been revoked at the issuer. With
 `TOKEN_STATUS_URL` set, `require_auth` (and so `check_auth`) asks the issuer whether the token is still
-active, caching the answer in the process for at most 30 seconds, so a revocation takes effect within 30
-seconds plus one call. With `TOKEN_STATUS_URL` unset nothing changes: no call, no cache, no token fetch.
+active. An `active` answer is cached in the process for at most 30 seconds, so a revocation takes effect
+within 30 seconds plus one call; a `revoked` one is kept until a minute past the token's expiry. With
+`TOKEN_STATUS_URL` unset nothing changes: no call, no cache, no token fetch.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |

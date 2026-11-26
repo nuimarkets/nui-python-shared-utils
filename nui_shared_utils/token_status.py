@@ -1,6 +1,7 @@
 """
 Token status check: ask the token issuer whether a verified access token is
-still active, caching the answer briefly.
+still active, caching an ``active`` answer for at most 30 seconds and a
+``revoked`` one until a minute past the token's expiry.
 
 A resource server that validates JWTs on its own (signature and expiry) cannot
 see a revocation recorded at the issuer, so a revoked token keeps working until
