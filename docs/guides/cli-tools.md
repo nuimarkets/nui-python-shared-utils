@@ -120,7 +120,7 @@ slack-channel-setup --config channels.yaml --output serverless-channels.yml --ou
 
 ```yaml
 channels:
-  - name: string              # Required: channel name (lowercase, hyphens)
+  - name: string              # Required: lowercase letters, numbers, hyphens, underscores
     description: string       # Required: shown in welcome message
     purpose: string          # Optional: channel purpose (Slack UI)
     topic: string            # Optional: channel topic (Slack UI)
@@ -261,10 +261,10 @@ custom:
 #### Channel Name Validation Errors
 
 ```
-❌ Invalid channel name: my_channel
+❌ Invalid channel name: My_Channel
 ```
 
-**Solution**: Use hyphens instead of underscores: `my-channel`
+**Solution**: Use lowercase letters: `my_channel`. Underscores are allowed.
 
 ### Best Practices
 
