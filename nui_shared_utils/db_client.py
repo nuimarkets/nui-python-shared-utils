@@ -208,6 +208,13 @@ class DatabaseClient(BaseClient, ServiceHealthMixin):
                         log.debug(f"Closed dead pooled connection for {pool_key}")
                         continue
 
+                    # A slow health check can cross the recycle boundary.
+                    age = time.monotonic() - entry["created_at"]
+                    if self.pool_recycle and self.pool_recycle > 0 and age >= self.pool_recycle:
+                        safe_close_connection(conn)
+                        log.debug(f"Recycled connection after checkout health check for {pool_key}")
+                        continue
+
                     connection = conn
                     created_at = entry["created_at"]
                     log.debug(f"Reused pooled connection (age: {age:.1f}s) for {pool_key}")

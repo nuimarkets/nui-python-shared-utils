@@ -332,9 +332,16 @@ and preserves any exception from the borrower. Commit writes explicitly inside
 `pool_recycle` limits total connection age from creation across repeated borrows. A
 connection at or beyond that age closes instead of returning to the pool; a nonpositive
 value disables age-based recycling. `aged_connections` in pool statistics counts
-connections created more than one hour ago. `pool_size` limits idle connections per
-identity. A `database=` override bypasses pooling and closes its connection on exit.
-Rollback ends transactions but does not reset arbitrary SQL session variables.
+connections created more than one hour ago. `pool_size` is checked when a client returns
+its connection. Clients with the same identity share a pool even when their limits differ;
+a smaller limit can close that client's returned connection while other idle connections
+remain. A `database=` override bypasses pooling and closes its connection on exit.
+Rollback ends transactions but does not reset arbitrary SQL session state, including a
+selected database changed with `USE`. Use `database=` for a separate database connection.
+
+The process-wide pool and its health statistics have no synchronization for concurrent
+threads. Do not share pooled operations or call `get_pool_stats()` concurrently across
+threads; use `use_pool=False` with separate connections for concurrent work.
 
 ## Environment-Specific Configuration
 

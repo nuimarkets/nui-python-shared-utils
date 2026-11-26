@@ -7,6 +7,7 @@ validation recipe. No AWS or remote database credentials are used.
 
 import os
 import uuid
+from contextlib import contextmanager
 
 import pymysql
 import pytest
@@ -34,8 +35,18 @@ def mysql_pool(monkeypatch):
     )
     table = "pool_lifecycle_" + uuid.uuid4().hex
     client.execute(f"CREATE TABLE `{table}` (value INT PRIMARY KEY) ENGINE=InnoDB")
+    session_ids = []
+    original_get_connection = client.get_connection
+
+    @contextmanager
+    def record_session(*args, **kwargs):
+        with original_get_connection(*args, **kwargs) as connection:
+            session_ids.append(connection.thread_id())
+            yield connection
+
+    monkeypatch.setattr(client, "get_connection", record_session)
     try:
-        yield client, table
+        yield client, table, session_ids
     finally:
         try:
             client.execute(f"DROP TABLE `{table}`")
@@ -48,7 +59,7 @@ def mysql_pool(monkeypatch):
 
 @pytest.mark.parametrize("borrower_fails", [False, True])
 def test_real_mysql_discards_uncommitted_work(mysql_pool, borrower_fails):
-    client, table = mysql_pool
+    client, table, session_ids = mysql_pool
     original = pymysql.OperationalError(1213, "Synthetic borrower failure")
 
     def borrow():
@@ -65,13 +76,17 @@ def test_real_mysql_discards_uncommitted_work(mysql_pool, borrower_fails):
     else:
         borrow()
 
+    initial_session = session_ids[-1]
     assert client.execute(f"INSERT INTO `{table}` (value) VALUES (%s)", (2,)) == 1
+    assert session_ids[-1] == initial_session
     assert client.query(f"SELECT value FROM `{table}` ORDER BY value") == [{"value": 2}]
 
 
 def test_real_mysql_partial_bulk_failure_rolls_back(mysql_pool):
-    client, table = mysql_pool
+    client, table, session_ids = mysql_pool
     with pytest.raises(pymysql.IntegrityError):
         client.bulk_insert(table, [{"value": 1}, {"value": 1}], batch_size=1)
+    initial_session = session_ids[-1]
     assert client.execute(f"INSERT INTO `{table}` (value) VALUES (%s)", (2,)) == 1
+    assert session_ids[-1] == initial_session
     assert client.query(f"SELECT value FROM `{table}` ORDER BY value") == [{"value": 2}]

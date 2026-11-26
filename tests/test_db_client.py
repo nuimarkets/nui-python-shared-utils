@@ -728,6 +728,26 @@ class TestPoolSafety:
         assert first.open is False
         assert len(self.store.connections) == 2
 
+    @pytest.mark.parametrize("age_after_ping", [9, 10, 11])
+    def test_checkout_rechecks_creation_age_after_health_ping(self, age_after_ping):
+        client = DatabaseClient(credentials=self.credentials, pool_recycle=10)
+        with client.get_connection() as first:
+            pass
+        self.clock = 9
+        original_ping = first.ping
+
+        def slow_ping(reconnect=False):
+            original_ping(reconnect=reconnect)
+            self.clock = age_after_ping
+
+        first.ping = slow_ping
+        with client.get_connection() as borrowed:
+            if age_after_ping < 10:
+                assert borrowed is first
+            else:
+                assert borrowed is not first
+                assert first.open is False
+
     def test_connection_expiring_during_borrow_is_not_returned(self):
         client = DatabaseClient(credentials=self.credentials, pool_recycle=10)
         with client.get_connection() as first:
