@@ -22,10 +22,18 @@ def _markdown_files():
     return sorted([*REPO_ROOT.glob("*.md"), *(REPO_ROOT / "docs").rglob("*.md")])
 
 
-def _strip_fence_indent(line, indent):
+def _leading_whitespace(line):
+    return line[: len(line) - len(line.lstrip(" \t"))]
+
+
+def _strip_fence_indent(line, fence_indent):
     """Remove the fence's own indentation (a fence nested in a list item), keeping any beyond it."""
-    leading = len(line) - len(line.lstrip(" "))
-    return line[min(indent, leading) :]
+    matched = 0
+    for fence_char, line_char in zip(fence_indent, line):
+        if fence_char != line_char:
+            break
+        matched += 1
+    return line[matched:]
 
 
 def _python_blocks(path):
@@ -34,7 +42,7 @@ def _python_blocks(path):
     for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if block is None:
             if OPEN_FENCE.match(line):
-                block = (number, len(line) - len(line.lstrip(" ")), [])
+                block = (number, _leading_whitespace(line), [])
         elif CLOSE_FENCE.match(line):
             yield block[0], "\n".join(block[2])
             block = None
@@ -62,3 +70,24 @@ def test_markdown_has_python_blocks_to_check():
 @pytest.mark.parametrize("source", CASES)
 def test_python_block_parses(source):
     ast.parse(source)
+
+
+@pytest.mark.parametrize(
+    "markdown, parses",
+    [
+        pytest.param("1. Step\n\n   ```python\n   x = 1\n   if x:\n       y = 2\n   ```\n", True, id="list-fence"),
+        pytest.param("\t```python\n\tx = 1\n\n\tif x:\n\t\ty = 2\n\t```\n", True, id="tab-fence"),
+        pytest.param("```python\n    x = 1\n```\n", False, id="excess-indent-top-level"),
+        pytest.param("   ```python\n       x = 1\n   ```\n", False, id="excess-indent-list-fence"),
+        pytest.param("   ```python\n   x = 1\n     y = 2\n   ```\n", False, id="uneven-indent"),
+    ],
+)
+def test_fence_indentation_is_stripped_and_nothing_more(tmp_path, markdown, parses):
+    path = tmp_path / "doc.md"
+    path.write_text(markdown, encoding="utf-8")
+    [(_, source)] = list(_python_blocks(path))
+    if parses:
+        ast.parse(source)
+    else:
+        with pytest.raises(SyntaxError):
+            ast.parse(source)
