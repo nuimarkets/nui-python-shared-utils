@@ -39,10 +39,14 @@ def rsa_keypair():
     - rsa_public_key: rsa.PublicKey for direct use in validate_jwt()
     """
     private_key = crypto_rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    public_key_pem = private_key.public_key().public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode("utf-8")
+    public_key_pem = (
+        private_key.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode("utf-8")
+    )
     rsa_public_key = rsa_lib.PublicKey.load_pkcs1_openssl_pem(public_key_pem.encode("utf-8"))
     return private_key, public_key_pem, rsa_public_key
 
@@ -270,9 +274,7 @@ class TestGetJwtPublicKey:
 
     def test_missing_key_field_raises(self, mock_secrets_manager):
         """Secret exists but missing the expected key field raises JWTValidationError."""
-        mock_secrets_manager.get_secret_value.return_value = {
-            "SecretString": json.dumps({"OTHER_FIELD": "some_value"})
-        }
+        mock_secrets_manager.get_secret_value.return_value = {"SecretString": json.dumps({"OTHER_FIELD": "some_value"})}
 
         with pytest.raises(JWTValidationError, match="Field 'TOKEN_PUBLIC_KEY' not found"):
             get_jwt_public_key(secret_name="test/jwt-key")

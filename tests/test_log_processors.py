@@ -18,8 +18,9 @@ from nui_shared_utils.log_processors import (
 class TestExtractCloudwatchLogsFromKinesis:
     """Tests for Kinesis log extraction."""
 
-    def _make_log_data(self, *, log_group="/aws/lambda/test", log_stream="stream",
-                       events=None, message_type="DATA_MESSAGE"):
+    def _make_log_data(
+        self, *, log_group="/aws/lambda/test", log_stream="stream", events=None, message_type="DATA_MESSAGE"
+    ):
         """Helper to create a CloudWatch logs data structure."""
         if events is None:
             events = [{"id": "1", "timestamp": 1705312800000, "message": "test"}]
@@ -64,11 +65,13 @@ class TestExtractCloudwatchLogsFromKinesis:
         assert len(results) == 0
 
     def test_multiple_events(self):
-        log_data = self._make_log_data(events=[
-            {"id": "1", "timestamp": 1705312800000, "message": "First"},
-            {"id": "2", "timestamp": 1705312801000, "message": "Second"},
-            {"id": "3", "timestamp": 1705312802000, "message": "Third"},
-        ])
+        log_data = self._make_log_data(
+            events=[
+                {"id": "1", "timestamp": 1705312800000, "message": "First"},
+                {"id": "2", "timestamp": 1705312801000, "message": "Second"},
+                {"id": "3", "timestamp": 1705312802000, "message": "Third"},
+            ]
+        )
         records = [self._make_kinesis_record(log_data)]
 
         results = list(extract_cloudwatch_logs_from_kinesis(records, self._passthrough_processor))
@@ -78,14 +81,18 @@ class TestExtractCloudwatchLogsFromKinesis:
 
     def test_multiple_records(self):
         records = [
-            self._make_kinesis_record(self._make_log_data(
-                log_group="/aws/lambda/func-a",
-                events=[{"id": "a1", "timestamp": 1705312800000, "message": "From A"}],
-            )),
-            self._make_kinesis_record(self._make_log_data(
-                log_group="/aws/lambda/func-b",
-                events=[{"id": "b1", "timestamp": 1705312800000, "message": "From B"}],
-            )),
+            self._make_kinesis_record(
+                self._make_log_data(
+                    log_group="/aws/lambda/func-a",
+                    events=[{"id": "a1", "timestamp": 1705312800000, "message": "From A"}],
+                )
+            ),
+            self._make_kinesis_record(
+                self._make_log_data(
+                    log_group="/aws/lambda/func-b",
+                    events=[{"id": "b1", "timestamp": 1705312800000, "message": "From B"}],
+                )
+            ),
         ]
 
         results = list(extract_cloudwatch_logs_from_kinesis(records, self._passthrough_processor))
@@ -122,9 +129,11 @@ class TestExtractCloudwatchLogsFromKinesis:
         def failing_processor(_log_group, _log_stream, _events):
             raise ValueError("Processing failed")
 
-        results = list(extract_cloudwatch_logs_from_kinesis(
-            records, failing_processor, on_error=lambda exc, data: errors.append((exc, data))
-        ))
+        results = list(
+            extract_cloudwatch_logs_from_kinesis(
+                records, failing_processor, on_error=lambda exc, data: errors.append((exc, data))
+            )
+        )
 
         assert len(results) == 0
         assert len(errors) == 1
@@ -143,10 +152,13 @@ class TestExtractCloudwatchLogsFromKinesis:
         records = [{"kinesis": {"data": "not-valid-base64!!!"}}]
 
         errors = []
-        results = list(extract_cloudwatch_logs_from_kinesis(
-            records, self._passthrough_processor,
-            on_error=lambda exc, _data: errors.append(exc),
-        ))
+        results = list(
+            extract_cloudwatch_logs_from_kinesis(
+                records,
+                self._passthrough_processor,
+                on_error=lambda exc, _data: errors.append(exc),
+            )
+        )
 
         assert len(results) == 0
         assert len(errors) == 1
@@ -160,10 +172,13 @@ class TestExtractCloudwatchLogsFromKinesis:
         records = [{"kinesis": {"data": encoded}}]
 
         errors = []
-        results = list(extract_cloudwatch_logs_from_kinesis(
-            records, self._passthrough_processor,
-            on_error=lambda exc, _data: errors.append(exc),
-        ))
+        results = list(
+            extract_cloudwatch_logs_from_kinesis(
+                records,
+                self._passthrough_processor,
+                on_error=lambda exc, _data: errors.append(exc),
+            )
+        )
 
         assert len(results) == 0
         assert len(errors) == 1
@@ -185,10 +200,13 @@ class TestExtractCloudwatchLogsFromKinesis:
         records = [{"not_kinesis": {}}]
 
         errors = []
-        results = list(extract_cloudwatch_logs_from_kinesis(
-            records, self._passthrough_processor,
-            on_error=lambda exc, _data: errors.append(exc),
-        ))
+        results = list(
+            extract_cloudwatch_logs_from_kinesis(
+                records,
+                self._passthrough_processor,
+                on_error=lambda exc, _data: errors.append(exc),
+            )
+        )
 
         assert len(results) == 0
         assert len(errors) == 1
@@ -217,7 +235,9 @@ class TestDeriveIndexName:
 
     def test_target_override(self):
         ts = datetime(2025, 1, 15, tzinfo=timezone.utc)
-        assert derive_index_name("/aws/lambda/test", ts, target_override="custom-target") == "log-custom-target-2025-m01"
+        assert (
+            derive_index_name("/aws/lambda/test", ts, target_override="custom-target") == "log-custom-target-2025-m01"
+        )
 
     def test_custom_prefix(self):
         ts = datetime(2025, 6, 1, tzinfo=timezone.utc)
