@@ -1631,13 +1631,22 @@ class TestHttpExchange:
         "raw",
         [
             b"SSH-2.0-OpenSSH\r\n\r\n",
-            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 6\r\n\r\nfalse",
+            b'HTTP/1.1 200 OK\r\nContent-Length: 17\r\nContent-Length: 16\r\n\r\n{"active": true}',
+            b'HTTP/1.1 200 OK\r\nContent-Length: 16\r\nContent-Length: 17\r\n\r\n{"active": true}',
             b"HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\n",
             b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n",
             b"HTTP/1.1 200 OK\r\nContent-Length: 50\r\n\r\n{}",
             b"",
         ],
-        ids=["not-http", "conflicting-length", "unknown-encoding", "bad-chunk", "short-body", "empty"],
+        ids=[
+            "not-http",
+            "lengths-last-fits",
+            "lengths-first-fits",
+            "unknown-encoding",
+            "bad-chunk",
+            "short-body",
+            "empty",
+        ],
     )
     def test_a_broken_reply_is_a_connection_failure(self, servers, monkeypatch, raw):
         token_server = servers(respond(TOKEN_REPLY))
