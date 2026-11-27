@@ -209,6 +209,10 @@ most likely fail the same way:
 | A 200 that is no answer (`malformed`) or is over 1 KB (`oversized`) | Any other 4xx (`http_<status>`), 403 included: a refusal of this token or this request |
 | A 401 after the retry with a new machine token (`http_401`): the issuer refuses this service's client, so every check in the process would end the same way | A token with no string `jti` (`missing_jti`), or an error inside the check (`unexpected`) |
 
+An outcome in the right-hand column opens nothing, so it recurs on every miss: while this process has no machine
+token and the token endpoint does not answer, each cache miss can spend the whole 2 second deadline, in `shadow`
+as in `enforce`.
+
 The status decides before the body cap: only a 200's body is read, so an oversized 502 is `http_502` and opens the
 breaker, an oversized 404 is `http_404` and does not, and an oversized 401 is retried like any 401. The rule
 depends on the reason alone, so a logged `reason` says whether the breaker opened.
