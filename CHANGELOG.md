@@ -13,7 +13,7 @@ that contained them.
 - Token status check in `require_auth` (and so `check_auth`): after the signature and expiry check, the
   validator asks the token issuer whether the token is still active. An `active` answer is cached in the
   process for at most 30 seconds, so a token revoked at the issuer is refused within 30 seconds plus one call;
-  a `revoked` one is kept until a minute past the token's expiry. Off unless
+  a `revoked` one is kept until a minute past the token's expiry, and at least a minute. Off unless
   `TOKEN_STATUS_URL` is set; with it unset `require_auth` behaves as before, with no call, cache or token fetch.
   `TOKEN_REVOCATION_MODE` (`off`, `shadow`, `enforce`; default `off`) and `TOKEN_REVOCATION_FAIL` (`open`,
   `closed`; default `open`) decide what is refused. The validator's own client-credentials token comes from

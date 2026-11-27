@@ -1,7 +1,7 @@
 """
 Token status check: ask the token issuer whether a verified access token is
 still active, caching an ``active`` answer for at most 30 seconds and a
-``revoked`` one until a minute past the token's expiry.
+``revoked`` one until a minute past the token's expiry, and at least a minute.
 
 A resource server that validates JWTs on its own (signature and expiry) cannot
 see a revocation recorded at the issuer, so a revoked token keeps working until
@@ -13,7 +13,7 @@ calls :func:`should_reject_token`, which asks the issuer about the token's
   t0 is when the check started, never past the token's ``exp``, and only if no
   entry exists, so a slow positive answer never replaces a newer ``revoked``.
 - 200 ``{"active": false}``: cached as ``revoked``, overwriting, until 60
-  seconds past the token's ``exp``.
+  seconds past the token's ``exp``, and at least 60 seconds.
 - Anything else: ``unavailable``, and nothing is cached. When the outcome says
   the issuer or the path to it failed (see :func:`_issuer_failed`), a 10 second
   breaker makes cache misses skip the call.

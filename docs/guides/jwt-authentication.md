@@ -168,7 +168,7 @@ time-claim types must be corrected by their issuer before use.
 A resource server that validates JWTs on its own (signature and expiry) cannot see a revocation recorded at the
 token issuer, so a revoked token keeps working until it expires. With `TOKEN_STATUS_URL` set, `require_auth`
 asks the issuer whether the token is still active after `validate_jwt` succeeds, and caches the answer: an
-`active` one for at most 30 seconds, a `revoked` one until a minute past the token's expiry.
+`active` one for at most 30 seconds, a `revoked` one until a minute past the token's expiry, and at least a minute.
 `validate_jwt` stays a pure signature and expiry check, and `check_auth` gets the check through `require_auth`.
 
 While the issuer answers, a revocation takes effect within 30 seconds plus one call. While it cannot answer,
@@ -214,9 +214,10 @@ breaker, an oversized 404 is `http_404` and does not, and an oversized 401 is re
 depends on the reason alone, so a logged `reason` says whether the breaker opened.
 
 The cache, the breaker and the machine token live in the process, so each warm Lambda container keeps its own.
-Nothing outside the process can delete an entry: a `revoked` one lapses a minute past the token's expiry, or
-goes with the process (in Lambda, a new execution environment, as after a deployment or a configuration
-change), and `TOKEN_REVOCATION_MODE=off` stops the cache being read. A token with no `exp` counts as already
+Nothing outside the process can delete an entry. A `revoked` one lasts until a minute past the token's expiry,
+and at least a minute, unless the bound below evicts it first or the process ends (in Lambda, a new execution
+environment, as after a deployment or a configuration change); `TOKEN_REVOCATION_MODE=off` stops the cache
+being read. A token with no `exp` counts as already
 expired, so an `active` answer for it is never cached and each request carrying it calls the issuer while it
 stays active.
 The cache holds at most 10,000 answers and drops the least recently used first.
