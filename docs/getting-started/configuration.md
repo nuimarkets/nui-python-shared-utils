@@ -95,6 +95,21 @@ and [libpq connection parameters](https://www.postgresql.org/docs/current/libpq-
 | `JWT_PUBLIC_KEY_SECRET` | AWS secret name for JWT public key | *(none)* |
 | `AWS_REGION` | AWS region for services | `us-east-1` |
 
+### Token Status Check
+
+Read by `require_auth` and `check_auth`. With `TOKEN_STATUS_URL` unset the check is off whatever the others
+say. What each does: [the JWT guide](../guides/jwt-authentication.md#configuration).
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `TOKEN_STATUS_URL` | The token issuer's status endpoint; unset turns the check off | *(none)* |
+| `TOKEN_REVOCATION_MODE` | `off`, `shadow` (check and log, refuse nothing) or `enforce` | `off` |
+| `TOKEN_REVOCATION_FAIL` | `open` admits a token whose status cannot be checked, `closed` refuses it | `open` |
+| `TOKEN_STATUS_TOKEN_URL` | OAuth token endpoint for this service's client-credentials token | *(none)* |
+| `TOKEN_STATUS_CLIENT_ID` | OAuth client ID, used with `TOKEN_STATUS_CLIENT_SECRET` when both are set | *(none)* |
+| `TOKEN_STATUS_CLIENT_SECRET` | OAuth client secret | *(none)* |
+| `TOKEN_STATUS_CREDENTIALS_SECRET` | AWS secret name holding `client_id` and `client_secret`, used when the two above are not both set | *(none)* |
+
 ### Alternative Variable Names
 
 The package supports alternative environment variable names for compatibility:
