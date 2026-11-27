@@ -1784,7 +1784,7 @@ class TestDeadline:
                 filler.close()
 
         self.assert_ends_at_deadline(elapsed, result, "connection")
-        # The 1 s cap on the attempt ends it, not the 2 s deadline; the lower bound shows the connect blocked.
+        # The 1 s cap on the attempt ends it, not the 2 s deadline; the lower bound shows the attempt blocked.
         assert ts.CONNECT_TIMEOUT_SECONDS - 0.1 <= elapsed < ts.CONNECT_TIMEOUT_SECONDS + SLACK
 
     def test_an_address_that_never_connects_gives_way_to_the_next_after_1_second(self, servers, monkeypatch):
